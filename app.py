@@ -428,10 +428,13 @@ with tab_dash:
 
             # Export
             out_buf = io.BytesIO()
+            export_feature_df = feature_df.tail(100).copy()
+            export_feature_df["Timestamp"] = export_feature_df["Timestamp"].astype(str)
             with pd.ExcelWriter(out_buf, engine="openpyxl") as wr:
                 proj_df.to_excel(wr, sheet_name="Projected_Horizon", index=False)
-                feature_df.tail(100).to_excel(wr, sheet_name="Historical_Features", index=False)
+                export_feature_df.to_excel(wr, sheet_name="Historical_Features", index=False)
             out_buf.seek(0)
+            
             st.download_button("📥 Export 3-Tier Multi-Horizon Report to Phone", out_buf, file_name=f"Quant_Agent_Projection_{token_id}.xlsx")
 
 # ---------------- TAB 2: UNIVERSAL TOKEN SEARCH ----------------
