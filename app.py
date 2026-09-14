@@ -373,37 +373,66 @@ with tab_dash:
             proj_df = brain.predict_multi_horizon(feature_df, horizon_minutes=steps_map[forecast_horizon])
 
             # 3-Tier Multi-Pane Figure
-            fig = make_subplots(
-                rows=3, cols=1, shared_xaxes=False, vertical_spacing=0.06,
-                subplot_titles=(
-                    "Tier 1: Historical Action + SMC / VWAP Deviation Bands",
-                    "Tier 2: Present Market State & Regime Transition",
-                    f"Tier 3: Projected Autonomous Multi-Horizon Candles ({forecast_horizon})"
-                ),
-                row_heights=[0.45, 0.20, 0.35]
+                        # ================= MOBILE OPTIMIZED SEPARATE CHARTS =================
+            slice_past = feature_df.tail(60).copy()
+
+            # --- CHART 1: PAST PRICE ACTION ---
+            st.markdown("#### 1️⃣ Past Price Action (SMC Zones, VWAP & EMA)")
+            st.caption("🔍 **Meaning:** Ye pichle 60 minutes ka trend hai. Purple line (VWAP) institutional average hai; price agar iske upar hai to buyers control me hain.")
+            
+            fig_past = go.Figure()
+            fig_past.add_trace(go.Candlestick(
+                x=slice_past["Timestamp"].astype(str), open=slice_past["Open"], high=slice_past["High"],
+                low=slice_past["Low"], close=slice_past["Close"], name="Candles"
+            ))
+            fig_past.add_trace(go.Scatter(
+                x=slice_past["Timestamp"].astype(str), y=slice_past["VWAP"],
+                line=dict(color="#ab63fa", width=1.8), name="VWAP (Inst. Price)"
+            ))
+            fig_past.add_trace(go.Scatter(
+                x=slice_past["Timestamp"].astype(str), y=slice_past["EMA_9"],
+                line=dict(color="#00cc96", width=1.4), name="9 EMA (Momentum)"
+            ))
+            fig_past.update_layout(
+                height=340, margin=dict(l=10, r=10, t=25, b=10),
+                template="plotly_dark", xaxis_rangeslider_visible=False,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
+            st.plotly_chart(fig_past, use_container_width=True)
 
-            # Tier 1: Past
-            slice_past = feature_df.tail(60)
-            fig.add_trace(go.Candlestick(
-                x=slice_past["Timestamp"], open=slice_past["Open"], high=slice_past["High"],
-                low=slice_past["Low"], close=slice_past["Close"], name="Historical Candles"
-            ), row=1, col=1)
-            fig.add_trace(go.Scatter(x=slice_past["Timestamp"], y=slice_past["VWAP"], line=dict(color="#ab63fa", width=1.5), name="VWAP"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=slice_past["Timestamp"], y=slice_past["EMA_9"], line=dict(color="#00cc96", width=1.2), name="EMA 9"), row=1, col=1)
+            # --- CHART 2: CVD ORDER FLOW ---
+            st.markdown("#### 2️⃣ Real-time Order Flow (Cumulative Volume Delta)")
+            st.caption("🔍 **Meaning:** Orange line aggressive buyers vs sellers ka net balance hai. Agar line upar ja rahi hai to institutions market orders se buy kar rahe hain.")
+            
+            fig_cvd = go.Figure()
+            fig_cvd.add_trace(go.Scatter(
+                x=slice_past["Timestamp"].astype(str), y=slice_past["CVD"],
+                line=dict(color="#ffa15a", width=2.2), fill="tozeroy",
+                fillcolor="rgba(255, 161, 90, 0.15)", name="CVD Balance"
+            ))
+            fig_cvd.update_layout(
+                height=220, margin=dict(l=10, r=10, t=25, b=10),
+                template="plotly_dark", xaxis_rangeslider_visible=False
+            )
+            st.plotly_chart(fig_cvd, use_container_width=True)
 
-            # Tier 2: Microstructure / CVD / Lunar
-            fig.add_trace(go.Scatter(x=slice_past["Timestamp"], y=slice_past["CVD"], line=dict(color="#ffa15a", width=2), name="CVD (Volume Delta)"), row=2, col=1)
-
-            # Tier 3: Future
-            fig.add_trace(go.Candlestick(
-                x=proj_df["Timestamp"], open=proj_df["Predicted_Open"], high=proj_df["Predicted_High"],
-                low=proj_df["Predicted_Low"], close=proj_df["Predicted_Close"], name="AI Projected Path",
+            # --- CHART 3: FUTURE PREDICTION CANDLES ---
+            st.markdown(f"#### 3️⃣ AI Forward Prediction ({forecast_horizon})")
+            st.caption("🔍 **Meaning:** Machine Learning aur Stochastic Drift dwara aane wale samay ki predicted candles. Har candle ka High/Low safe stop-loss aur target boundary deta hai.")
+            
+            fig_fut = go.Figure()
+            fig_fut.add_trace(go.Candlestick(
+                x=proj_df["Timestamp"].astype(str), open=proj_df["Predicted_Open"],
+                high=proj_df["Predicted_High"], low=proj_df["Predicted_Low"],
+                close=proj_df["Predicted_Close"], name="Projected Path",
                 increasing_line_color="#00FFA3", decreasing_line_color="#FF3366"
-            ), row=3, col=1)
+            ))
+            fig_fut.update_layout(
+                height=340, margin=dict(l=10, r=10, t=25, b=10),
+                template="plotly_dark", xaxis_rangeslider_visible=False
+            )
+            st.plotly_chart(fig_fut, use_container_width=True)
 
-            fig.update_layout(height=850, template="plotly_dark", xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
 
             # Contextual Explainability & Executive Breakdown
             st.markdown("### 📋 Executive Quant Summary & Contextual Event Thesis")
