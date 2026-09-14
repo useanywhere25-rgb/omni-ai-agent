@@ -1,0 +1,11 @@
+streamlit
+pandas
+numpy
+plotly
+openpyxl
+pyotp
+smartapi-python
+logzero
+websocket-client
+scikit-learn
+requests
