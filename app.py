@@ -184,7 +184,7 @@ class MultiModalFeatureEngine:
                                 np.where(slope_20 > 0.005, "Trending_Bullish", np.where(slope_20 < -0.005, "Trending_Bearish", "High_Vol_Choppy")),
                                 "Low_Vol_Consolidation")
         
-        return df.fillna(method="bfill").fillna(0)
+        return df.bfill().fillna(0)
 
 # =====================================================================
 # 3. CONTINUOUS SELF-LEARNING & PREDICTIVE ENGINE
