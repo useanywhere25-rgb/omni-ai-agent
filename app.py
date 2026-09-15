@@ -1,11 +1,11 @@
 """
-HIGH-FREQUENCY QUANT DATA VAULT (V24 - PURE EXTRACTION & LOGGING ENGINE)
-========================================================================
-- Tab 1: Dynamic Watchlist selector (up to 50 active instruments).
-- Tab 2: Non-stop per-second Level-2 Depth logger (25 columns) with live viewer.
-- Tab 3: Deep 1-minute historical candle ingestion & persistent storage.
-- Tab 4: Direct Mobile/PC Excel exporter (.xlsx) with custom date-range slicing.
-- Pure Exchange Data: Zero random numbers, zero fake math, zero synthetic ticks.
+HIGH-FREQUENCY QUANT DATA RECORDER & HISTORICAL VAULT (PRODUCTION V25)
+======================================================================
+1. Tab 1: Dynamic Watchlist selector (up to 50 active instruments).
+2. Tab 2: Non-stop per-second Level-2 Depth recorder (exact 25 specified columns).
+3. Tab 3: Historical per-minute OHLCV ingestion engine with max available exchange backfill.
+4. Tab 4: Excel (.xlsx) file exporter with custom date/time range filtering.
+5. 100% Authentic Exchange Data: No random numbers, no synthetic fallback values.
 """
 
 import os
@@ -17,7 +17,6 @@ import urllib.request
 import threading
 from datetime import datetime, timezone, timedelta
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -35,7 +34,7 @@ st.set_page_config(
 )
 
 IST = timezone(timedelta(hours=5, minutes=30))
-DB_PATH = "market_raw_vault.db"
+DB_PATH = "market_raw_vault_master.db"
 
 DEFAULT_API_KEY = "C1OmpYQf"
 DEFAULT_CLIENT_CODE = "V169656"
@@ -132,7 +131,7 @@ class SmartApiConnector:
             return False
 
     def fetch_live_depth(self, exchange, symbol, token):
-        """Fetches authentic 5-level depth tick directly from exchange."""
+        """Fetches authentic 5-level depth tick directly from exchange gateway."""
         if not self.api:
             return None
         try:
@@ -140,6 +139,8 @@ class SmartApiConnector:
             if res and res.get("status") and res.get("data") and res["data"].get("fetched"):
                 item = res["data"]["fetched"][0]
                 ltp = float(item.get("ltp", 0.0))
+                if ltp <= 0:
+                    return None
                 vol = int(item.get("tradeVolume", 0))
 
                 depth = item.get("depth", {})
@@ -168,8 +169,8 @@ class SmartApiConnector:
                 a5 = float(asks[4]["price"]) if len(asks) > 4 else 0.0
                 aq5 = int(asks[4]["quantity"]) if len(asks) > 4 else 0
 
-                tot_buy = sum([x.get("quantity", 0) for x in bids]) if bids else bq1
-                tot_sell = sum([x.get("quantity", 0) for x in asks]) if asks else aq1
+                tot_buy = sum([int(x.get("quantity", 0)) for x in bids]) if bids else bq1
+                tot_sell = sum([int(x.get("quantity", 0)) for x in asks]) if asks else aq1
 
                 return {
                     "ltp": ltp,
@@ -181,7 +182,7 @@ class SmartApiConnector:
         except Exception:
             pass
 
-        # Fallback to standard LTP endpoint
+        # Standard LTP call fallback
         try:
             q = self.api.ltpData(exchange, symbol if symbol else "INSTRUMENT", str(token))
             if q.get("status") and q.get("data"):
@@ -198,17 +199,16 @@ class SmartApiConnector:
             pass
         return None
 
-    def fetch_historical(self, exchange, token, interval="ONE_MINUTE", days=10):
+    def fetch_historical_chunk(self, exchange, token, from_date_str, to_date_str):
+        """Fetches a specific date window of 1-minute historical candles from exchange."""
         if not self.api:
             return pd.DataFrame()
-        now_ist = datetime.now(IST)
-        start_ist = now_ist - timedelta(days=days)
         param = {
             "exchange": exchange,
             "symboltoken": str(token),
-            "interval": interval,
-            "fromdate": start_ist.strftime("%Y-%m-%d 09:15"),
-            "todate": now_ist.strftime("%Y-%m-%d %H:%M")
+            "interval": "ONE_MINUTE",
+            "fromdate": from_date_str,
+            "todate": to_date_str
         }
         try:
             res = self.api.getCandleData(param)
@@ -261,10 +261,10 @@ class BackgroundVaultEngine:
                 if not watchlist_df.empty:
                     for _, item in watchlist_df.iterrows():
                         tok = str(item["token"])
-                        exch = item["exchange"]
+                        exch = str(item["exchange"])
                         sym = str(item["symbol"])
 
-                        # 1. Capture Per-Second Level 2 Tick
+                        # 1. Capture and write live per-second L2 depth tick
                         quote = self.connector.fetch_live_depth(exch, sym, tok)
                         if quote and quote["ltp"] > 0:
                             conn_tick = get_db()
@@ -285,9 +285,11 @@ class BackgroundVaultEngine:
                             conn_tick.commit()
                             conn_tick.close()
 
-                        # 2. Capture Per-Minute OHLCV Candles
+                        # 2. Automated rolling minute candle logger
                         if curr_min != self.last_sync_minute:
-                            hist_df = self.connector.fetch_historical(exch, tok, days=2)
+                            from_d = (now - timedelta(days=2)).strftime("%Y-%m-%d 09:15")
+                            to_d = now.strftime("%Y-%m-%d %H:%M")
+                            hist_df = self.connector.fetch_historical_chunk(exch, tok, from_d, to_d)
                             if not hist_df.empty:
                                 conn_hist = get_db()
                                 cursor_hist = conn_hist.cursor()
@@ -417,8 +419,8 @@ with tab1:
 
 # ---------------- TAB 2: LIVE PER-SECOND RECORD & STREAM ----------------
 with tab2:
-    st.subheader("⚡ Live Per-Second Level-2 Depth Stream (25 Columns)")
-    st.caption("Every second of all selected 50 instruments is continuously recorded in SQLite. Select an instrument to view its live incoming order depth.")
+    st.subheader("⚡ Live Per-Second Level-2 Depth Stream (Exact 25 Columns)")
+    st.caption("Every second of all selected instruments is recorded non-stop in SQLite with 5-Level Bid/Ask walls. Select an instrument to monitor its incoming ticks.")
 
     if not active_tokens_info:
         st.warning("Pehle Tab 1 me jakar instruments add karein.")
@@ -433,7 +435,7 @@ with tab2:
 
         st.metric(f"Total Per-Second Ticks Recorded for Token {curr_token}", f"{t2_ticks:,}")
 
-        # Display latest 50 recorded per-second ticks
+        # Live Display of latest 50 recorded per-second ticks
         conn = get_db()
         ticks_df = pd.read_sql("""
             SELECT timestamp, ltp, volume,
@@ -449,12 +451,12 @@ with tab2:
         if not ticks_df.empty:
             st.dataframe(ticks_df, use_container_width=True)
         else:
-            st.info(f"Background daemon is ingesting per-second ticks for token {curr_token}. Stand by for incoming ticks...")
+            st.info(f"Background daemon is ingesting per-second ticks for token {curr_token}. Stand by for incoming exchange ticks...")
 
 # ---------------- TAB 3: HISTORICAL PER-MINUTE STORE ----------------
 with tab3:
     st.subheader("📊 Historical Per-Minute OHLCV Store")
-    st.caption("Deep 1-minute historical data for all selected instruments permanently preserved in SQLite.")
+    st.caption("Deep 1-minute historical data for all selected instruments permanently preserved in SQLite. Click below to pull maximum historical data available from exchange.")
 
     if not active_tokens_info:
         st.warning("Pehle Tab 1 me jakar instruments add karein.")
@@ -462,24 +464,39 @@ with tab3:
         h_inspect_label = st.selectbox("🎯 Select Tracked Asset to View Historical Bars:", [x["label"] for x in active_tokens_info], key="t3_sel")
         h_sel_meta = [x for x in active_tokens_info if x["label"] == h_inspect_label][0]
         h_token = str(h_sel_meta["token"])
-        h_exch = h_sel_meta["exchange"]
+        h_exch = str(h_sel_meta["exchange"])
 
-        col_h1, col_h2 = st.columns([1, 3])
+        col_h1, col_h2 = st.columns([1, 2])
         with col_h1:
-            if st.button("🔄 Fetch & Append Deep History (15 Days)"):
-                with st.spinner("Pulling candles from exchange gateway..."):
-                    deep_df = agent_conn.fetch_historical(h_exch, h_token, interval="ONE_MINUTE", days=15)
-                    if not deep_df.empty:
-                        conn = get_db()
-                        cursor = conn.cursor()
-                        for _, r in deep_df.iterrows():
-                            cursor.execute("""
-                                INSERT OR REPLACE INTO historical_minute_candles VALUES (?, ?, ?, ?, ?, ?, ?)
-                            """, (r["Timestamp"].strftime("%Y-%m-%d %H:%M"), h_token, r["Open"], r["High"], r["Low"], r["Close"], int(r["Volume"])))
-                        conn.commit()
-                        conn.close()
-                        st.success(f"Successfully appended {len(deep_df)} minute bars!")
-                        st.rerun()
+            backfill_days = st.slider("Select Historical Window to Pull (Days)", min_value=5, max_value=90, value=30)
+            if st.button("🚀 Fetch & Archive Max 1-Minute History"):
+                with st.spinner(f"Pulling {backfill_days} days of 1-minute candles in chunks from exchange gateway..."):
+                    now = datetime.now(IST)
+                    total_inserted = 0
+                    
+                    # Angel One provides 1-min data in 30-day blocks
+                    for chunk_idx in range(0, backfill_days, 30):
+                        chunk_end = now - timedelta(days=chunk_idx)
+                        chunk_start = now - timedelta(days=min(backfill_days, chunk_idx + 30))
+                        
+                        f_str = chunk_start.strftime("%Y-%m-%d 09:15")
+                        t_str = chunk_end.strftime("%Y-%m-%d 15:30")
+                        
+                        chunk_df = agent_conn.fetch_historical_chunk(h_exch, h_token, f_str, t_str)
+                        if not chunk_df.empty:
+                            conn = get_db()
+                            cursor = conn.cursor()
+                            for _, r in chunk_df.iterrows():
+                                cursor.execute("""
+                                    INSERT OR REPLACE INTO historical_minute_candles VALUES (?, ?, ?, ?, ?, ?, ?)
+                                """, (r["Timestamp"].strftime("%Y-%m-%d %H:%M"), h_token, r["Open"], r["High"], r["Low"], r["Close"], int(r["Volume"])))
+                            conn.commit()
+                            conn.close()
+                            total_inserted += len(chunk_df)
+                        time.sleep(0.5)
+
+                    st.success(f"Successfully backfilled and saved {total_inserted:,} minute bars into vault!")
+                    st.rerun()
 
         conn = get_db()
         t3_count = pd.read_sql("SELECT COUNT(*) as c FROM historical_minute_candles WHERE token = ?", conn, params=(h_token,))["c"].iloc[0]
@@ -490,14 +507,14 @@ with tab3:
         if not hist_view_df.empty:
             st.dataframe(hist_view_df, use_container_width=True)
         else:
-            st.info("No historical bars in database yet. Click 'Fetch & Append Deep History' to pull from exchange.")
+            st.info("No historical bars stored for this token yet. Click 'Fetch & Archive Max 1-Minute History' to pull from exchange.")
 
 # ---------------- TAB 4: MOBILE/PC EXCEL EXPORTER ----------------
 with tab4:
     st.subheader("📥 Direct Excel Data Exporter (.xlsx)")
     st.caption("Select dataset type, instrument, and time period to download formatted Excel sheets directly to your mobile or computer.")
 
-    export_type = st.radio("1. Select Dataset Type:", [
+    export_type = st.radio("1. Select Dataset Type to Export:", [
         "⚡ Level-2 Per-Second Raw Stream (25 Columns)",
         "📊 Historical Per-Minute OHLCV Candles"
     ], horizontal=True)
@@ -545,7 +562,6 @@ with tab4:
         st.markdown(f"**Found {len(export_df):,} matching rows** for export.")
 
         if not export_df.empty:
-            # Generate Excel in-memory buffer
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 export_df.to_excel(writer, index=False, sheet_name="Market_Data")
@@ -560,4 +576,4 @@ with tab4:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
-            st.info("Selected date range has 0 recorded rows for this instrument. Adjust the date filters or let the engine record more live data.")
+            st.info("Selected date range has 0 recorded rows for this instrument. Adjust the date filters or allow the engine to record more ticks.")
