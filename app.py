@@ -462,28 +462,55 @@ tab_watch, tab_dash, tab_inspect, tab_db, tab_memory = st.tabs([
 ])
 
 # ---------------- TAB 1: DYNAMIC TOP-50 WATCHLIST ----------------
-# ---------------- TAB 1: DYNAMIC TOP-50 WATCHLIST ----------------
+# ---------------- TAB 1: DYNAMIC TOP-50 WATCHLIST (OPTIONS & STRIKES) ----------------
 with tab_watch:
     st.subheader("🎯 Configure Active Autonomous Tracking (Up to 50 Instruments)")
-    st.caption("2-Step Smart Filter: Select Exchange and Symbol to add contracts to continuous autonomous tracking.")
+    st.caption("Select Segment, Asset, Expiry, and Strike Price (CE/PE) to track real-time options contracts.")
 
     if "active_tracked_dict" not in st.session_state:
         st.session_state["active_tracked_dict"] = {}
 
     col_w1, col_w2 = st.columns(2)
     with col_w1:
-        sel_seg = st.selectbox("1. Filter Exchange / Segment", ["MCX", "NFO", "NSE", "CDS"], index=0)
+        sel_seg = st.selectbox("1. Exchange / Segment", ["NFO", "MCX", "NSE", "CDS"], index=0)
     with col_w2:
         names_in_seg = sorted(scrip_master[scrip_master["exch_seg"] == sel_seg]["name"].dropna().unique().tolist())
-        default_idx = names_in_seg.index("CRUDEOIL") if "CRUDEOIL" in names_in_seg else (names_in_seg.index("NIFTY") if "NIFTY" in names_in_seg else 0)
+        default_idx = names_in_seg.index("NIFTY") if "NIFTY" in names_in_seg else (names_in_seg.index("CRUDEOIL") if "CRUDEOIL" in names_in_seg else 0)
         sel_name = st.selectbox("2. Select Underlying Asset", names_in_seg, index=default_idx)
 
-    # Filtered specific options for chosen asset
+    # Base filter for chosen underlying asset
     subset_df = scrip_master[(scrip_master["exch_seg"] == sel_seg) & (scrip_master["name"] == sel_name)].copy()
-    available_choices = subset_df["label"].tolist()
+
+    # --- ADVANCED F&O / OPTION STRIKE FILTERS ---
+    available_choices = []
+    if sel_seg in ["NFO", "MCX"]:
+        col_f1, col_f2, col_f3 = st.columns(3)
+        with col_f1:
+            expiries = sorted(subset_df["expiry"].dropna().unique().tolist())
+            sel_expiry = st.selectbox("3. Expiry Date", expiries) if expiries else None
+        with col_f2:
+            opt_types = ["ALL", "CE", "PE"]
+            sel_opttype = st.selectbox("4. Option Type", opt_types)
+        with col_f3:
+            # Filter strikes based on expiry
+            exp_subset = subset_df[subset_df["expiry"] == sel_expiry] if sel_expiry else subset_df
+            if sel_opttype != "ALL":
+                exp_subset = exp_subset[exp_subset["symbol"].str.endswith(sel_opttype)]
+            
+            strikes = sorted(exp_subset["strike_num"].dropna().unique().tolist())
+            sel_strike = st.selectbox("5. Strike Price", ["ALL"] + [str(int(s) if s.is_integer() else s) for s in strikes])
+
+        # Filter dataset according to selections
+        final_filtered = exp_subset.copy()
+        if sel_strike != "ALL":
+            final_filtered = final_filtered[final_filtered["strike_num"] == float(sel_strike)]
+
+        available_choices = final_filtered["label"].tolist()
+    else:
+        available_choices = subset_df["label"].tolist()
 
     selected_batch = st.multiselect(
-        f"Add {sel_name} Contracts to Autonomous Tracking:",
+        f"Select Specific Contracts to Track ({sel_name}):",
         options=available_choices,
         default=available_choices[:3] if len(available_choices) >= 3 else available_choices
     )
@@ -500,14 +527,13 @@ with tab_watch:
                     st.session_state["active_tracked_dict"][tok] = {
                         "exchange": exch, "token": tok, "label": item, "exch_code": exch_code
                     }
-            st.toast("Active watchlist updated!")
+            st.toast("Watchlist updated successfully!")
 
     with col_btn2:
         if st.button("🗑️ Clear Active Tracking Watchlist"):
             st.session_state["active_tracked_dict"] = {}
-            st.toast("Watchlist cleared! Past SQLite database remains safe.")
+            st.toast("Watchlist cleared! Database history safe.")
 
-    # Convert tracked dict to list
     active_tokens_info = list(st.session_state["active_tracked_dict"].values())
 
     if is_connected and active_tokens_info:
@@ -520,6 +546,7 @@ with tab_watch:
     st.markdown("#### Currently Monitored Instruments (Max 50):")
     if active_tokens_info:
         st.dataframe(pd.DataFrame(active_tokens_info)[["exchange", "token", "label"]], use_container_width=True)
+        
         
 # ---------------- TAB 2: 3-TIER MULTI-HORIZON DASHBOARD ----------------
 with tab_dash:
