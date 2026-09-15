@@ -1,10 +1,10 @@
 """
-OMNI-REGIME AUTONOMOUS AI QUANT AGENT (V17 - WAL CONCURRENCY ENGINE)
-===================================================================
-1. SQLite WAL Mode (Write-Ahead Logging) + 30s Busy Timeout: Eliminates 'database is locked'.
-2. Non-blocking Parallel Concurrency: Daemon writes per-second ticks while UI reads smoothly.
+OMNI-REGIME AUTONOMOUS AI QUANT AGENT (V18 - CLOUD-NATIVE THREAD-SAFE ENGINE)
+============================================================================
+1. Streamlit Cloud Network Safe: Zero WAL crashes, Thread-Lock concurrency.
+2. Live Per-Second L2 Depth Stream (26 Columns) with continuous 2-second auto-update.
 3. Auto-Rolling 10-Minute Green Horizon with strictly chronological timestamps.
-4. Side-by-Side Reality Ledger with 30 parameters (Predicted vs Actual, Volumes, 5-Level Bid/Ask Depth).
+4. Side-by-Side Reality Ledger with 30 parameters (Predicted vs Actual, Volumes, 5-Level Depth).
 5. 100+ Indicators + SMC Suite (VWAP Bands, ATR, RSI, Bollinger Bands, BOS, FVG, CVD, Lunar Harmonics).
 """
 
@@ -41,6 +41,7 @@ st.set_page_config(
 
 IST = timezone(timedelta(hours=5, minutes=30))
 DB_PATH = "market_memory_master.db"
+DB_LOCK = threading.Lock()
 
 DEFAULT_API_KEY = "C1OmpYQf"
 DEFAULT_CLIENT_CODE = "V169656"
@@ -48,17 +49,17 @@ DEFAULT_PIN = "2000"
 DEFAULT_TOTP_SECRET = "PAMVHWB26NCO7P773O5GBIQQLE"
 
 # =====================================================================
-# 1. DATABASE LAYER WITH WAL CONCURRENCY (ZERO LOCK CONFLICTS)
+# 1. THREAD-SAFE CLOUD-COMPLIANT DATABASE LAYER
 # =====================================================================
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH, timeout=30.0, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL;")
+    conn = sqlite3.connect(DB_PATH, timeout=60.0, check_same_thread=False)
     conn.execute("PRAGMA synchronous=NORMAL;")
-    conn.execute("PRAGMA busy_timeout=30000;")
+    conn.execute("PRAGMA busy_timeout=60000;")
     return conn
 
 def init_database():
-    with get_db_connection() as conn:
+    with DB_LOCK:
+        conn = get_db_connection()
         cursor = conn.cursor()
 
         # 1. Per-Second Level 2 Depth Table (28 Columns)
@@ -150,6 +151,7 @@ def init_database():
             """)
 
         conn.commit()
+        conn.close()
 
 init_database()
 
@@ -358,7 +360,8 @@ class AutonomousQuantBrain:
         curr_rsi = float(latest_row["RSI_14"])
 
         predictions = []
-        with get_db_connection() as conn:
+        with DB_LOCK:
+            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute("DELETE FROM active_predictions WHERE token = ?", (token,))
 
@@ -418,6 +421,7 @@ class AutonomousQuantBrain:
                 curr_rsi = max(10.0, min(90.0, curr_rsi + (1.2 if step_shift > 0 else -1.2)))
 
             conn.commit()
+            conn.close()
 
         return pd.DataFrame(predictions)
 
@@ -426,7 +430,8 @@ class AutonomousQuantBrain:
         now_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
 
         try:
-            with get_db_connection() as conn:
+            with DB_LOCK:
+                conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT step, target_timestamp, predicted_close, predicted_volume FROM active_predictions 
@@ -435,6 +440,7 @@ class AutonomousQuantBrain:
                 expired_rows = cursor.fetchall()
 
                 if not expired_rows:
+                    conn.close()
                     return False
 
                 b1_p = l2_tick.get("bid1", round(actual_ltp - 0.05, 2)) if l2_tick else round(actual_ltp - 0.05, 2)
@@ -485,6 +491,7 @@ class AutonomousQuantBrain:
                     cursor.execute("DELETE FROM active_predictions WHERE token = ? AND step = ?", (token, step_val))
 
                 conn.commit()
+                conn.close()
                 return True
         except Exception:
             return False
@@ -492,7 +499,7 @@ class AutonomousQuantBrain:
 GLOBAL_QUANT_BRAIN = AutonomousQuantBrain()
 
 # =====================================================================
-# 5. 24/7 BACKGROUND AUTONOMOUS WORKER DAEMON (PARALLEL WAL WRITER)
+# 5. 24/7 BACKGROUND AUTONOMOUS WORKER DAEMON
 # =====================================================================
 class GlobalAutonomousWorker:
     def __init__(self):
@@ -525,7 +532,8 @@ class GlobalAutonomousWorker:
                     tokens = list(self.active_watchlist)
 
                 if tokens:
-                    with get_db_connection() as conn:
+                    with DB_LOCK:
+                        conn = get_db_connection()
                         cursor = conn.cursor()
                         for item in tokens:
                             tok = str(item["token"])
@@ -582,6 +590,7 @@ class GlobalAutonomousWorker:
                             self.last_minute_cycle = curr_min
 
                         conn.commit()
+                        conn.close()
             except Exception:
                 pass
             time.sleep(1)
@@ -617,6 +626,7 @@ tab_watch, tab_learning, tab_dash, tab_inspect, tab_db = st.tabs([
     "🔬 100+ Methods Inspector",
     "💾 Master SQLite Database"
 ])
+
 # ---------------- TAB 1: DYNAMIC 50-WATCHLIST ----------------
 with tab_watch:
     st.subheader("🎯 Configure Autonomous Tracking (Max 50 Instruments)")
@@ -700,9 +710,11 @@ with tab_learning:
             try:
                 live_p = agent_conn.fetch_live_ltp(curr_exch, curr_token)
                 if live_p <= 0:
-                    with get_db_connection() as conn:
+                    with DB_LOCK:
+                        conn = get_db_connection()
                         cur_tick = pd.read_sql("SELECT ltp FROM l2_depth_ticks WHERE token = ? ORDER BY rowid DESC LIMIT 1", conn, params=(curr_token,))
-                        live_p = float(cur_tick.iloc[0]["ltp"]) if not cur_tick.empty else 10.50
+                        conn.close()
+                    live_p = float(cur_tick.iloc[0]["ltp"]) if not cur_tick.empty else 10.50
 
                 GLOBAL_QUANT_BRAIN.evaluate_minute_expiry(curr_token, live_p)
 
@@ -711,26 +723,30 @@ with tab_learning:
                 st.caption("Auto-rolling window: As each minute completes, it evaluates and adds the next forward minute.")
 
                 now_ts = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
-                with get_db_connection() as conn:
+                with DB_LOCK:
+                    conn = get_db_connection()
                     live_preds = pd.read_sql("""
                         SELECT step, target_timestamp, predicted_open, predicted_high, predicted_low, predicted_close, predicted_volume 
                         FROM active_predictions 
                         WHERE token = ? AND target_timestamp > ?
                         ORDER BY target_timestamp ASC
                     """, conn, params=(curr_token, now_ts))
+                    conn.close()
 
                 if live_preds.empty or len(live_preds) < 10:
                     hist_df = agent_conn.fetch_historical(curr_exch, curr_token, days=2)
                     feat_df = MultiModalFeatureEngine.extract_features(hist_df, base_ltp=live_p)
                     st.session_state["active_feature_df"] = feat_df
                     GLOBAL_QUANT_BRAIN.roll_forward_prediction(curr_token, feat_df, live_p)
-                    with get_db_connection() as conn:
+                    with DB_LOCK:
+                        conn = get_db_connection()
                         live_preds = pd.read_sql("""
                             SELECT step, target_timestamp, predicted_open, predicted_high, predicted_low, predicted_close, predicted_volume 
                             FROM active_predictions 
                             WHERE token = ?
                             ORDER BY target_timestamp ASC
                         """, conn, params=(curr_token,))
+                        conn.close()
 
                 if not live_preds.empty:
                     styled_df = live_preds.copy()
@@ -749,7 +765,8 @@ with tab_learning:
                 st.markdown("### ⚖️ Side-by-Side Reality vs Prediction Comparison (Self-Correction Ledger)")
                 st.caption("Compares realized prices with forecasts, alongside realized Top-5 Bid/Ask wall depth & minute volume.")
 
-                with get_db_connection() as conn:
+                with DB_LOCK:
+                    conn = get_db_connection()
                     raw_ledger = pd.read_sql("""
                         SELECT evaluated_at, step, predicted_price, actual_realized_price, error_diff_inr, pct_error, minute_volume,
                                bid1_p, bid1_q, bid2_p, bid2_q, bid3_p, bid3_q, bid4_p, bid4_q, bid5_p, bid5_q,
@@ -759,6 +776,7 @@ with tab_learning:
                         WHERE token = ? 
                         ORDER BY rowid DESC LIMIT 20
                     """, conn, params=(curr_token,))
+                    conn.close()
 
                 if not raw_ledger.empty:
                     st.dataframe(raw_ledger, use_container_width=True)
@@ -770,7 +788,8 @@ with tab_learning:
                 st.markdown("### 🗄️ Ingested Data Feed Matrix (Historical vs Live Per-Second)")
                 data_view_mode = st.radio("Select Ingestion Matrix to View:", ["⚡ Live Per-Second L2 Depth (25 Columns)", "📊 Historical Per-Minute Bars (Database Cache)"], horizontal=True, key="mat_rad")
 
-                with get_db_connection() as conn:
+                with DB_LOCK:
+                    conn = get_db_connection()
                     if "Live Per-Second" in data_view_mode:
                         st.caption("⚡ Streaming Live Ticks: Automatically appending every second from exchange pipeline.")
                         l2_feed = pd.read_sql("SELECT timestamp, ltp, microprice, imbalance, bid1, bidq1, bid2, bidq2, bid3, bidq3, ask1, askq1, ask2, askq2, ask3, askq3, total_buy_qty, total_sell_qty FROM l2_depth_ticks WHERE token = ? ORDER BY rowid DESC LIMIT 25", conn, params=(curr_token,))
@@ -786,6 +805,7 @@ with tab_learning:
                         else:
                             if "active_feature_df" in st.session_state and not st.session_state["active_feature_df"].empty:
                                 st.dataframe(st.session_state["active_feature_df"][["Timestamp", "Open", "High", "Low", "Close", "Volume"]].tail(25), use_container_width=True)
+                    conn.close()
 
             except Exception as e:
                 st.caption(f"Syncing state: {e}")
@@ -873,9 +893,11 @@ with tab_inspect:
 with tab_db:
     st.subheader("💾 Master SQLite Database Archive")
     try:
-        with get_db_connection() as conn:
+        with DB_LOCK:
+            conn = get_db_connection()
             t_ticks = pd.read_sql("SELECT COUNT(*) as c FROM l2_depth_ticks", conn)["c"].iloc[0]
             t_audits = pd.read_sql("SELECT COUNT(*) as c FROM learning_ledger", conn)["c"].iloc[0]
+            conn.close()
 
         c1, c2 = st.columns(2)
         c1.metric("Total L2 Depth Ticks Stored", f"{t_ticks:,}")
