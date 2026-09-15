@@ -462,38 +462,65 @@ tab_watch, tab_dash, tab_inspect, tab_db, tab_memory = st.tabs([
 ])
 
 # ---------------- TAB 1: DYNAMIC TOP-50 WATCHLIST ----------------
+# ---------------- TAB 1: DYNAMIC TOP-50 WATCHLIST ----------------
 with tab_watch:
     st.subheader("🎯 Configure Active Autonomous Tracking (Up to 50 Instruments)")
-    st.caption("Add or remove any asset at any time. When deselected, previously recorded historical data remains permanently saved in the local SQLite database.")
+    st.caption("2-Step Smart Filter: Select Exchange and Symbol to add contracts to continuous autonomous tracking.")
 
-    options_list = scrip_master["label"].tolist()
-    default_selection = [
-        opt for opt in options_list 
-        if ("CRUDEOIL" in opt and "MCX" in opt) or ("NIFTY" in opt and "NSE" in opt) or ("RELIANCE" in opt and "NSE" in opt)
-    ][:5]
+    if "active_tracked_dict" not in st.session_state:
+        st.session_state["active_tracked_dict"] = {}
 
-    selected_labels = st.multiselect(
-        "Select Active Assets (Max 50):",
-        options=options_list,
-        default=default_selection,
-        max_selections=50
+    col_w1, col_w2 = st.columns(2)
+    with col_w1:
+        sel_seg = st.selectbox("1. Filter Exchange / Segment", ["MCX", "NFO", "NSE", "CDS"], index=0)
+    with col_w2:
+        names_in_seg = sorted(scrip_master[scrip_master["exch_seg"] == sel_seg]["name"].dropna().unique().tolist())
+        default_idx = names_in_seg.index("CRUDEOIL") if "CRUDEOIL" in names_in_seg else (names_in_seg.index("NIFTY") if "NIFTY" in names_in_seg else 0)
+        sel_name = st.selectbox("2. Select Underlying Asset", names_in_seg, index=default_idx)
+
+    # Filtered specific options for chosen asset
+    subset_df = scrip_master[(scrip_master["exch_seg"] == sel_seg) & (scrip_master["name"] == sel_name)].copy()
+    available_choices = subset_df["label"].tolist()
+
+    selected_batch = st.multiselect(
+        f"Add {sel_name} Contracts to Autonomous Tracking:",
+        options=available_choices,
+        default=available_choices[:3] if len(available_choices) >= 3 else available_choices
     )
 
-    active_tokens_info = []
-    for label in selected_labels:
-        parts = label.split(" | ")
-        exch = parts[0]
-        tok = parts[2].replace("Token:", "").strip()
-        exch_code = 5 if exch == "MCX" else (1 if exch == "NSE" else (2 if exch == "NFO" else 3))
-        active_tokens_info.append({"exchange": exch, "token": tok, "label": label, "exch_code": exch_code})
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("➕ Add Selected to Active Tracker"):
+            for item in selected_batch:
+                if len(st.session_state["active_tracked_dict"]) < 50:
+                    parts = item.split(" | ")
+                    exch = parts[0]
+                    tok = parts[2].replace("Token:", "").strip()
+                    exch_code = 5 if exch == "MCX" else (1 if exch == "NSE" else (2 if exch == "NFO" else 3))
+                    st.session_state["active_tracked_dict"][tok] = {
+                        "exchange": exch, "token": tok, "label": item, "exch_code": exch_code
+                    }
+            st.toast("Active watchlist updated!")
 
-    if is_connected:
+    with col_btn2:
+        if st.button("🗑️ Clear Active Tracking Watchlist"):
+            st.session_state["active_tracked_dict"] = {}
+            st.toast("Watchlist cleared! Past SQLite database remains safe.")
+
+    # Convert tracked dict to list
+    active_tokens_info = list(st.session_state["active_tracked_dict"].values())
+
+    if is_connected and active_tokens_info:
         st.session_state.bg_worker.start(agent_conn, active_tokens_info)
         st.session_state.bg_worker.update_watchlist(active_tokens_info)
-        st.success(f"🟢 Background Autonomous Engine Tracking {len(active_tokens_info)} Instruments Non-Stop!")
-    
-    st.dataframe(pd.DataFrame(active_tokens_info), use_container_width=True)
+        st.success(f"🟢 Background Autonomous Engine Tracking {len(active_tokens_info)} Active Instruments Non-Stop!")
+    elif not active_tokens_info:
+        st.info("Currently 0 instruments tracked. Select contracts above and click 'Add Selected'.")
 
+    st.markdown("#### Currently Monitored Instruments (Max 50):")
+    if active_tokens_info:
+        st.dataframe(pd.DataFrame(active_tokens_info)[["exchange", "token", "label"]], use_container_width=True)
+        
 # ---------------- TAB 2: 3-TIER MULTI-HORIZON DASHBOARD ----------------
 with tab_dash:
     st.subheader("Unified 3-Tier Market Intelligence Visualizer")
