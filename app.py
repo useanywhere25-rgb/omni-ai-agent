@@ -40,15 +40,15 @@ st.set_page_config(
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
-)[span_1](start_span)[span_1](end_span)
+)
 
-IST = timezone(timedelta(hours=5, minutes=30))[span_2](start_span)[span_2](end_span)
+IST = timezone(timedelta(hours=5, minutes=30))
 DB_PATH = "market_memory_master.db"
 
-DEFAULT_API_KEY = "C1OmpYQf[span_3](start_span)"[span_3](end_span)
-DEFAULT_CLIENT_CODE = "V169656[span_4](start_span)"[span_4](end_span)
-DEFAULT_PIN = "2000[span_5](start_span)"[span_5](end_span)
-DEFAULT_TOTP_SECRET = "PAMVHWB26NCO7P773O5GBIQQLE[span_6](start_span)"[span_6](end_span)
+DEFAULT_API_KEY = "C1OmpYQf"
+DEFAULT_CLIENT_CODE = "V169656"
+DEFAULT_PIN = "2000"
+DEFAULT_TOTP_SECRET = "PAMVHWB26NCO7P773O5GBIQQLE"
 
 # =====================================================================
 # 1. DATABASE LAYER (PERSISTENT MULTI-ASSET STORAGE)
@@ -56,7 +56,6 @@ DEFAULT_TOTP_SECRET = "PAMVHWB26NCO7P773O5GBIQQLE[span_6](start_span)"[span_6](e
 def init_database():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     cursor = conn.cursor()
-    # Level-2 Per-Second Stream Table (25 Columns)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS l2_depth_ticks (
             timestamp TEXT,
@@ -78,7 +77,6 @@ def init_database():
             total_sell_qty INTEGER
         )
     ''')
-    # Self-Learning Ledger Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS learning_ledger (
             evaluated_at TEXT,
@@ -101,25 +99,25 @@ init_database()
 # =====================================================================
 class SmartApiConnector:
     def __init__(self, api_key, client_code, pin, totp_secret):
-        self.api_key = api_key[span_7](start_span)[span_7](end_span)
-        self.client_code = client_code[span_8](start_span)[span_8](end_span)
-        self.pin = pin[span_9](start_span)[span_9](end_span)
-        self.totp_secret = totp_secret[span_10](start_span)[span_10](end_span)
-        self.api = None[span_11](start_span)[span_11](end_span)
-        self.auth_token = None[span_12](start_span)[span_12](end_span)
-        self.feed_token = None[span_13](start_span)[span_13](end_span)
+        self.api_key = api_key
+        self.client_code = client_code
+        self.pin = pin
+        self.totp_secret = totp_secret
+        self.api = None
+        self.auth_token = None
+        self.feed_token = None
 
     def connect(self):
         try:
-            self.api = SmartConnect(api_key=self.api_key)[span_14](start_span)[span_14](end_span)
-            totp = pyotp.TOTP(self.totp_secret).now()[span_15](start_span)[span_15](end_span)
-            session = self.api.generateSession(self.client_code, self.pin, totp)[span_16](start_span)[span_16](end_span)
-            self.feed_token = self.api.getfeedToken()[span_17](start_span)[span_17](end_span)
-            self.auth_token = session["data"]["jwtToken"][span_18](start_span)[span_18](end_span)
-            return True[span_19](start_span)[span_19](end_span)
+            self.api = SmartConnect(api_key=self.api_key)
+            totp = pyotp.TOTP(self.totp_secret).now()
+            session = self.api.generateSession(self.client_code, self.pin, totp)
+            self.feed_token = self.api.getfeedToken()
+            self.auth_token = session["data"]["jwtToken"]
+            return True
         except Exception as e:
-            st.sidebar.error(f"API Login Error: {e}")[span_20](start_span)[span_20](end_span)
-            return False[span_21](start_span)[span_21](end_span)
+            st.sidebar.error(f"API Login Error: {e}")
+            return False
 
     def fetch_live_ltp(self, exchange, token):
         if not self.api:
@@ -134,9 +132,9 @@ class SmartApiConnector:
 
     def fetch_historical(self, exchange, token, interval="ONE_MINUTE", days=5):
         if not self.api:
-            return pd.DataFrame()[span_22](start_span)[span_22](end_span)
-        now_ist = datetime.now(IST)[span_23](start_span)[span_23](end_span)
-        start_ist = now_ist - timedelta(days=days)[span_24](start_span)[span_24](end_span)
+            return pd.DataFrame()
+        now_ist = datetime.now(IST)
+        start_ist = now_ist - timedelta(days=days)
         param = {
             "exchange": exchange,
             "symboltoken": str(token),
@@ -145,24 +143,24 @@ class SmartApiConnector:
             "todate": now_ist.strftime("%Y-%m-%d %H:%M")
         }
         try:
-            res = self.api.getCandleData(param)[span_25](start_span)[span_25](end_span)
+            res = self.api.getCandleData(param)
             if res and res.get("status") and res.get("data"):
-                df = pd.DataFrame(res["data"], columns=["Timestamp", "Open", "High", "Low", "Close", "Volume"])[span_26](start_span)[span_26](end_span)
-                df["Timestamp"] = pd.to_datetime(df["Timestamp"])[span_27](start_span)[span_27](end_span)
-                df = df.sort_values(by="Timestamp").reset_index(drop=True)[span_28](start_span)[span_28](end_span)
-                return df[span_29](start_span)[span_29](end_span)
+                df = pd.DataFrame(res["data"], columns=["Timestamp", "Open", "High", "Low", "Close", "Volume"])
+                df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+                df = df.sort_values(by="Timestamp").reset_index(drop=True)
+                return df
         except Exception:
             pass
-        return pd.DataFrame()[span_30](start_span)[span_30](end_span)
+        return pd.DataFrame()
 
 @st.cache_data(ttl=86400)
 def load_scrip_master():
-    url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json[span_31](start_span)"[span_31](end_span)
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})[span_32](start_span)[span_32](end_span)
+    url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req) as resp:
-        data = json.loads(resp.read().decode("utf-8"))[span_33](start_span)[span_33](end_span)
-    df = pd.DataFrame(data)[span_34](start_span)[span_34](end_span)
-    df["strike_num"] = pd.to_numeric(df["strike"], errors="coerce") / 100.0[span_35](start_span)[span_35](end_span)
+        data = json.loads(resp.read().decode("utf-8"))
+    df = pd.DataFrame(data)
+    df["strike_num"] = pd.to_numeric(df["strike"], errors="coerce") / 100.0
     df["label"] = df["exch_seg"] + " | " + df["symbol"] + " | Token:" + df["token"]
     return df
 
@@ -173,56 +171,56 @@ class MultiModalFeatureEngine:
     @staticmethod
     def extract_features(df):
         if df.empty or len(df) < 15:
-            return df[span_36](start_span)[span_36](end_span)
-        df = df.copy()[span_37](start_span)[span_37](end_span)
+            return df
+        df = df.copy()
 
         # 1. Moving Averages & Bands
-        df["SMA_20"] = df["Close"].rolling(20).mean()[span_38](start_span)[span_38](end_span)
-        df["EMA_9"] = df["Close"].ewm(span=9, adjust=False).mean()[span_39](start_span)[span_39](end_span)
-        df["EMA_21"] = df["Close"].ewm(span=21, adjust=False).mean()[span_40](start_span)[span_40](end_span)
+        df["SMA_20"] = df["Close"].rolling(20).mean()
+        df["EMA_9"] = df["Close"].ewm(span=9, adjust=False).mean()
+        df["EMA_21"] = df["Close"].ewm(span=21, adjust=False).mean()
         df["EMA_50"] = df["Close"].ewm(span=50, adjust=False).mean()
         df["HMA_14"] = df["Close"].rolling(14).mean()
 
         # 2. VWAP & Deviation Bands
-        cum_vol = df["Volume"].cumsum().replace(0, 1)[span_41](start_span)[span_41](end_span)
-        cum_pv = (df["Close"] * df["Volume"]).cumsum()[span_42](start_span)[span_42](end_span)
-        df["VWAP"] = cum_pv / cum_vol[span_43](start_span)[span_43](end_span)
-        df["VWAP_Std"] = (df["Close"] - df["VWAP"]).rolling(20).std().fillna(1.0)[span_44](start_span)[span_44](end_span)
+        cum_vol = df["Volume"].cumsum().replace(0, 1)
+        cum_pv = (df["Close"] * df["Volume"]).cumsum()
+        df["VWAP"] = cum_pv / cum_vol
+        df["VWAP_Std"] = (df["Close"] - df["VWAP"]).rolling(20).std().fillna(1.0)
         df["VWAP_Upper"] = df["VWAP"] + (2.0 * df["VWAP_Std"])
         df["VWAP_Lower"] = df["VWAP"] - (2.0 * df["VWAP_Std"])
-        df["VWAP_ZScore"] = (df["Close"] - df["VWAP"]) / df["VWAP_Std"].replace(0, 1)[span_45](start_span)[span_45](end_span)
+        df["VWAP_ZScore"] = (df["Close"] - df["VWAP"]) / df["VWAP_Std"].replace(0, 1)
 
         # 3. Momentum, ATR & Volatility
-        delta = df["Close"].diff()[span_46](start_span)[span_46](end_span)
-        gain = delta.clip(lower=0)[span_47](start_span)[span_47](end_span)
-        loss = -delta.clip(upper=0)[span_48](start_span)[span_48](end_span)
-        avg_gain = gain.rolling(14).mean()[span_49](start_span)[span_49](end_span)
-        avg_loss = loss.rolling(14).mean().replace(0, 1e-5)[span_50](start_span)[span_50](end_span)
-        rs = avg_gain / avg_loss[span_51](start_span)[span_51](end_span)
-        df["RSI_14"] = 100 - (100 / (1 + rs))[span_52](start_span)[span_52](end_span)
+        delta = df["Close"].diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.rolling(14).mean()
+        avg_loss = loss.rolling(14).mean().replace(0, 1e-5)
+        rs = avg_gain / avg_loss
+        df["RSI_14"] = 100 - (100 / (1 + rs))
 
-        tr1 = df["High"] - df["Low"][span_53](start_span)[span_53](end_span)
-        tr2 = (df["High"] - df["Close"].shift(1)).abs()[span_54](start_span)[span_54](end_span)
-        tr3 = (df["Low"] - df["Close"].shift(1)).abs()[span_55](start_span)[span_55](end_span)
-        df["ATR_14"] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1).rolling(14).mean().fillna(0.5)[span_56](start_span)[span_56](end_span)
+        tr1 = df["High"] - df["Low"]
+        tr2 = (df["High"] - df["Close"].shift(1)).abs()
+        tr3 = (df["Low"] - df["Close"].shift(1)).abs()
+        df["ATR_14"] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1).rolling(14).mean().fillna(0.5)
 
         # 4. Smart Money Concepts (SMC) & Microstructure
-        df["BOS_Bullish"] = (df["Close"] > df["High"].rolling(10).max().shift(1)).astype(int)[span_57](start_span)[span_57](end_span)
-        df["BOS_Bearish"] = (df["Close"] < df["Low"].rolling(10).min().shift(1)).astype(int)[span_58](start_span)[span_58](end_span)
-        df["Bullish_FVG"] = ((df["Low"] > df["High"].shift(2)) & (df["Close"].shift(1) > df["High"].shift(2))).astype(int)[span_59](start_span)[span_59](end_span)
-        df["Bearish_FVG"] = ((df["High"] < df["Low"].shift(2)) & (df["Close"].shift(1) < df["Low"].shift(2))).astype(int)[span_60](start_span)[span_60](end_span)
+        df["BOS_Bullish"] = (df["Close"] > df["High"].rolling(10).max().shift(1)).astype(int)
+        df["BOS_Bearish"] = (df["Close"] < df["Low"].rolling(10).min().shift(1)).astype(int)
+        df["Bullish_FVG"] = ((df["Low"] > df["High"].shift(2)) & (df["Close"].shift(1) > df["High"].shift(2))).astype(int)
+        df["Bearish_FVG"] = ((df["High"] < df["Low"].shift(2)) & (df["Close"].shift(1) < df["Low"].shift(2))).astype(int)
 
         # 5. Order Flow CVD & Relative Volume
-        up_ticks = (df["Close"] >= df["Open"]).astype(int)[span_61](start_span)[span_61](end_span)
-        df["Volume_Delta"] = np.where(up_ticks, df["Volume"], -df["Volume"])[span_62](start_span)[span_62](end_span)
-        df["CVD"] = df["Volume_Delta"].cumsum()[span_63](start_span)[span_63](end_span)
-        df["RVOL"] = df["Volume"] / df["Volume"].rolling(20).mean().replace(0, 1)[span_64](start_span)[span_64](end_span)
+        up_ticks = (df["Close"] >= df["Open"]).astype(int)
+        df["Volume_Delta"] = np.where(up_ticks, df["Volume"], -df["Volume"])
+        df["CVD"] = df["Volume_Delta"].cumsum()
+        df["RVOL"] = df["Volume"] / df["Volume"].rolling(20).mean().replace(0, 1)
 
         # 6. Astro-Harmonics Lunar Phase Proxy
-        timestamps = df["Timestamp"].astype("int64") // 10**9[span_65](start_span)[span_65](end_span)
-        lunar_seconds = 29.53059 * 86400[span_66](start_span)[span_66](end_span)
-        df["Lunar_Phase_Sin"] = np.sin(2 * np.pi * (timestamps % lunar_seconds) / lunar_seconds)[span_67](start_span)[span_67](end_span)
-        df["Lunar_Phase_Cos"] = np.cos(2 * np.pi * (timestamps % lunar_seconds) / lunar_seconds)[span_68](start_span)[span_68](end_span)
+        timestamps = df["Timestamp"].astype("int64") // 10**9
+        lunar_seconds = 29.53059 * 86400
+        df["Lunar_Phase_Sin"] = np.sin(2 * np.pi * (timestamps % lunar_seconds) / lunar_seconds)
+        df["Lunar_Phase_Cos"] = np.cos(2 * np.pi * (timestamps % lunar_seconds) / lunar_seconds)
 
         # 7. Regime Detection
         slope_10 = (df["Close"] - df["Close"].shift(10)) / df["Close"].shift(10).replace(0, 1)
@@ -238,34 +236,34 @@ class MultiModalFeatureEngine:
 # =====================================================================
 class AutonomousQuantBrain:
     def __init__(self):
-        self.models = {}  # One model per active token
+        self.models = {}
         self.scalers = {}
         self.feature_cols = [
             "EMA_9", "EMA_21", "VWAP_ZScore", "RSI_14", "ATR_14", 
             "BOS_Bullish", "BOS_Bearish", "Bullish_FVG", "Bearish_FVG", 
             "Volume_Delta", "RVOL", "Lunar_Phase_Sin", "Lunar_Phase_Cos"
-        ][span_69](start_span)[span_69](end_span)
+        ]
         self.pending_audit_memory = []
 
     def fit_model(self, token, df):
-        clean_df = df.dropna().copy()[span_70](start_span)[span_70](end_span)
+        clean_df = df.dropna().copy()
         if len(clean_df) < 20:
-            return False[span_71](start_span)[span_71](end_span)
-        clean_df["Target_Next_Close"] = clean_df["Close"].shift(-1)[span_72](start_span)[span_72](end_span)
-        train_set = clean_df.dropna()[span_73](start_span)[span_73](end_span)
+            return False
+        clean_df["Target_Next_Close"] = clean_df["Close"].shift(-1)
+        train_set = clean_df.dropna()
 
-        X = train_set[self.feature_cols][span_74](start_span)[span_74](end_span)
-        y = train_set["Target_Next_Close"][span_75](start_span)[span_75](end_span)
+        X = train_set[self.feature_cols]
+        y = train_set["Target_Next_Close"]
 
         scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)[span_76](start_span)[span_76](end_span)
+        X_scaled = scaler.fit_transform(X)
         
-        model = GradientBoostingRegressor(n_estimators=50, learning_rate=0.05, max_depth=4, random_state=42)[span_77](start_span)[span_77](end_span)
-        model.fit(X_scaled, y)[span_78](start_span)[span_78](end_span)
+        model = GradientBoostingRegressor(n_estimators=50, learning_rate=0.05, max_depth=4, random_state=42)
+        model.fit(X_scaled, y)
         
         self.models[token] = model
         self.scalers[token] = scaler
-        return True[span_79](start_span)[span_79](end_span)
+        return True
 
     def auto_verify_and_retrain(self, live_ltp, token):
         if live_ltp <= 0 or not self.pending_audit_memory:
@@ -284,12 +282,10 @@ class AutonomousQuantBrain:
                 pct_error = round((error / actual_price) * 100, 2) if actual_price > 0 else 0
                 status = "HIT" if pct_error <= 0.5 else "REBALANCE_WEIGHTS"
                 
-                # Write to SQLite
                 cursor.execute('''
                     INSERT INTO learning_ledger VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (now.strftime("%H:%M:%S"), token, item["step"], predicted_price, actual_price, error, pct_error, status))
                 
-                # Online adaptation
                 if token in self.models and item.get("feature_snapshot") is not None:
                     try:
                         x_mat = self.scalers[token].transform(item["feature_snapshot"])
@@ -306,15 +302,15 @@ class AutonomousQuantBrain:
 
     def predict_multi_horizon(self, token, df, current_live_price, horizon_minutes=10):
         if df.empty:
-            return pd.DataFrame()[span_80](start_span)[span_80](end_span)
+            return pd.DataFrame()
         
         if token not in self.models:
             self.fit_model(token, df)
             
-        latest_row = df.iloc[-1].copy()[span_81](start_span)[span_81](end_span)
+        latest_row = df.iloc[-1].copy()
         predictions = []
         curr_close = current_live_price if current_live_price > 0 else float(latest_row["Close"])
-        curr_vol = float(latest_row["Volume"])[span_82](start_span)[span_82](end_span)
+        curr_vol = float(latest_row["Volume"])
         atr = float(latest_row["ATR_14"]) if latest_row["ATR_14"] > 0 else max(0.5, curr_close * 0.003)
         now_time = datetime.now(IST)
         
@@ -381,7 +377,6 @@ class AutonomousQuantBrain:
             
         return pd.DataFrame(predictions)
 
-# Instantiate Single Brain Instance
 if "quant_brain" not in st.session_state:
     st.session_state.quant_brain = AutonomousQuantBrain()
 
@@ -391,7 +386,7 @@ if "quant_brain" not in st.session_state:
 class BackgroundQuantWorker:
     def __init__(self):
         self.is_running = False
-        self.tracked_tokens = []  # List of dicts: {"token": "...", "exchange": "...", "exch_code": 1}
+        self.tracked_tokens = []
         self.connector = None
         self.thread = None
 
@@ -413,12 +408,10 @@ class BackgroundQuantWorker:
         while self.is_running:
             try:
                 now_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
-                # Iterate through active tracked tokens
                 for item in list(self.tracked_tokens):
                     tok = str(item["token"])
                     exch = item["exchange"]
                     
-                    # Fetch real LTP
                     ltp = self.connector.fetch_live_ltp(exch, tok)
                     if ltp > 0:
                         cursor.execute('''
@@ -429,13 +422,12 @@ class BackgroundQuantWorker:
                             round(ltp + 0.1, 2), 150, round(ltp + 0.2, 2), 300, round(ltp + 0.3, 2), 650, round(ltp + 0.4, 2), 950, round(ltp + 0.5, 2), 1500,
                             2850, 3550
                         ))
-                        # Trigger autonomous neural learning audit
                         st.session_state.quant_brain.auto_verify_and_retrain(ltp, tok)
                         
                 conn.commit()
             except Exception:
                 pass
-            time.sleep(1) # Per-second cycle
+            time.sleep(1)
 
 if "bg_worker" not in st.session_state:
     st.session_state.bg_worker = BackgroundQuantWorker()
@@ -446,15 +438,14 @@ if "bg_worker" not in st.session_state:
 st.title("⚡ Omni-Regime Autonomous AI Trading Agent")
 st.caption("Native Indian Quant Engine: 24/7 Background Ingestion, 50-Token Watchlist, SQLite Memory & Zero Fake Data.")
 
-# Sidebar Broker Access
 st.sidebar.header("🔑 Broker Connection (Angel One)")
-api_key = st.sidebar.text_input("API Key", value=DEFAULT_API_KEY)[span_83](start_span)[span_83](end_span)
-client_code = st.sidebar.text_input("Client Code", value=DEFAULT_CLIENT_CODE)[span_84](start_span)[span_84](end_span)
-pin = st.sidebar.text_input("PIN", value=DEFAULT_PIN, type="password")[span_85](start_span)[span_85](end_span)
-totp_sec = st.sidebar.text_input("TOTP Secret", value=DEFAULT_TOTP_SECRET)[span_86](start_span)[span_86](end_span)
+api_key = st.sidebar.text_input("API Key", value=DEFAULT_API_KEY)
+client_code = st.sidebar.text_input("Client Code", value=DEFAULT_CLIENT_CODE)
+pin = st.sidebar.text_input("PIN", value=DEFAULT_PIN, type="password")
+totp_sec = st.sidebar.text_input("TOTP Secret", value=DEFAULT_TOTP_SECRET)
 
-agent_conn = SmartApiConnector(api_key, client_code, pin, totp_sec)[span_87](start_span)[span_87](end_span)
-is_connected = agent_conn.connect()[span_88](start_span)[span_88](end_span)
+agent_conn = SmartApiConnector(api_key, client_code, pin, totp_sec)
+is_connected = agent_conn.connect()
 if is_connected:
     st.sidebar.success("🟢 Broker Stream: Active & Connected")
 else:
@@ -462,7 +453,6 @@ else:
 
 scrip_master = load_scrip_master()
 
-# Navigation Tabs
 tab_watch, tab_dash, tab_inspect, tab_db, tab_memory = st.tabs([
     "🎯 Dynamic Top-50 Watchlist",
     "📊 3-Tier Multi-Horizon Dashboard",
@@ -489,7 +479,6 @@ with tab_watch:
         max_selections=50
     )
 
-    # Parse selected instruments
     active_tokens_info = []
     for label in selected_labels:
         parts = label.split(" | ")
@@ -498,7 +487,6 @@ with tab_watch:
         exch_code = 5 if exch == "MCX" else (1 if exch == "NSE" else (2 if exch == "NFO" else 3))
         active_tokens_info.append({"exchange": exch, "token": tok, "label": label, "exch_code": exch_code})
 
-    # Update Background Worker
     if is_connected:
         st.session_state.bg_worker.start(agent_conn, active_tokens_info)
         st.session_state.bg_worker.update_watchlist(active_tokens_info)
@@ -678,7 +666,6 @@ with tab_db:
     recent_l2 = pd.read_sql("SELECT * FROM l2_depth_ticks ORDER BY rowid DESC LIMIT 50", conn)
     st.dataframe(recent_l2, use_container_width=True)
 
-    # Full Database Download Button
     if os.path.exists(DB_PATH):
         with open(DB_PATH, "rb") as db_file:
             st.download_button(
