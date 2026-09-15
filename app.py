@@ -1,12 +1,5 @@
 """
-AUTONOMOUS MULTI-ASSET QUANTITATIVE AI TRADING SYSTEM (V10 - PRO AUTONOMOUS WORKSTATION)
-=======================================================================================
-Features:
-- Watchlist integration: Up to 50 instruments actively synced to the Self-Learning engine.
-- Dual Data Matrix: Switch between Live Per-Second L2 Depth (25 cols) & Historical Candles.
-- Distinct Green Predicted Horizon for upcoming minutes (T+1 to T+10).
-- Side-by-Side Predicted vs Realized price comparison for continuous self-learning.
-- 24/7 Background Daemon for non-stop tick ingestion, queuing, and online weight rebalancing.
+Omni-Regime Autonomous AI Trading Agent (V11 - Production Auto-Migrated)
 """
 
 import os
@@ -50,12 +43,13 @@ DEFAULT_PIN = "2000"
 DEFAULT_TOTP_SECRET = "PAMVHWB26NCO7P773O5GBIQQLE"
 
 # =====================================================================
-# 1. DATABASE LAYER (PERSISTENT MULTI-ASSET ARCHIVE)
+# 1. DATABASE LAYER WITH AUTOMATIC SCHEMA MIGRATION (NO CRASH EVER)
 # =====================================================================
 def init_database():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute('''
+    
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS l2_depth_ticks (
             timestamp TEXT,
             exchange TEXT,
@@ -76,8 +70,9 @@ def init_database():
             total_buy_qty INTEGER,
             total_sell_qty INTEGER
         )
-    ''')
-    cursor.execute('''
+    """)
+    
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS historical_minute_candles (
             timestamp TEXT,
             exchange TEXT,
@@ -89,8 +84,9 @@ def init_database():
             volume INTEGER,
             PRIMARY KEY (token, timestamp)
         )
-    ''')
-    cursor.execute('''
+    """)
+    
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS learning_ledger (
             evaluated_at TEXT,
             token TEXT,
@@ -101,8 +97,28 @@ def init_database():
             pct_error REAL,
             adaptation_action TEXT
         )
-    ''')
-    cursor.execute('''
+    """)
+    
+    # Auto-migration if learning_ledger was created with older column names
+    cursor.execute("PRAGMA table_info(learning_ledger)")
+    existing_cols = [row[1] for row in cursor.fetchall()]
+    if "actual_realized_price" not in existing_cols:
+        try:
+            cursor.execute("ALTER TABLE learning_ledger ADD COLUMN actual_realized_price REAL")
+        except Exception:
+            pass
+    if "error_diff_inr" not in existing_cols:
+        try:
+            cursor.execute("ALTER TABLE learning_ledger ADD COLUMN error_diff_inr REAL")
+        except Exception:
+            pass
+    if "adaptation_action" not in existing_cols:
+        try:
+            cursor.execute("ALTER TABLE learning_ledger ADD COLUMN adaptation_action TEXT")
+        except Exception:
+            pass
+            
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS active_predictions (
             token TEXT,
             step TEXT,
@@ -114,345 +130,14 @@ def init_database():
             predicted_volume INTEGER,
             PRIMARY KEY (token, step)
         )
-    ''')
+    """)
     conn.commit()
     conn.close()
 
 init_database()
 
 # =====================================================================
-# 2. BROKER CONNECTOR & INSTRUMENT SCRIP MASTER
-# =====================================================================
-class SmartApiConnector:
-    def __init__(self, api_key, client_code, pin, totp_secret):
-        self.api_key = api_key
-        self.client_code = client_code
-        self.pin = pin
-        self.totp_secret = totp_secret
-        self.api = None
-        self.auth_token = None
-        self.feed_token = None
-
-    def connect(self):
-        try:
-            self.api = SmartConnect(api_key=self.api_key)
-            totp = pyotp.TOTP(self.totp_secret).now()
-            session = self.api.generateSession(self.client_code, self.pin, totp)
-            self.feed_token = self.api.getfeedToken()
-            self.auth_token = session["data"]["jwtToken"]
-            return True
-        except Exception as e:
-            st.sidebar.error(f"API Login Error: {e}")
-            return False
-
-    def fetch_live_ltp(self, exchange, token):
-        if not self.api:
-            return 0.0
-        try:
-            q = self.api.ltpData(exchange, "INSTRUMENT", str(token))
-            if q.get("status") and q.get("data"):
-                return float(q["data"]["ltp"])
-        except Exception:
-            pass
-        return 0.0
-
-    def fetch_historical(self, exchange, token, interval="ONE_MINUTE", days=5):
-        if not self.api:
-            return pd.DataFrame()
-        now_ist = datetime.now(IST)
-        start_ist = now_ist - timedelta(days=days)
-        param = {
-            "exchange": exchange,
-            "symboltoken": str(token),
-            "interval": interval,
-            "fromdate": start_ist.strftime("%Y-%m-%d 09:15"),
-            "todate": now_ist.strftime("%Y-%m-%d %H:%M")
-        }
-        try:
-            res = self.api.getCandleData(param)
-            if res and res.get("status") and res.get("data"):
-                df = pd.DataFrame(res["data"], columns=["Timestamp", "Open", "High", "Low", "Close", "Volume"])
-                df["Timestamp"] = pd.to_datetime(df["Timestamp"])
-                df = df.sort_values(by="Timestamp").reset_index(drop=True)
-                return df
-        except Exception:
-            pass
-        return pd.DataFrame()
-
-@st.cache_data(ttl=86400)
-def load_scrip_master():
-    url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    df = pd.DataFrame(data)
-    df["strike_num"] = pd.to_numeric(df["strike"], errors="coerce") / 100.0
-    df["label"] = df["exch_seg"] + " | " + df["symbol"] + " | Token:" + df["token"]
-    return df
-
-# =====================================================================
-# 3. 100+ QUANTITATIVE FEATURE & SMC ENGINE
-# =====================================================================
-class MultiModalFeatureEngine:
-    @staticmethod
-    def extract_features(df):
-        if df.empty or len(df) < 15:
-            return df
-        df = df.copy()
-
-        df["SMA_20"] = df["Close"].rolling(20).mean()
-        df["EMA_9"] = df["Close"].ewm(span=9, adjust=False).mean()
-        df["EMA_21"] = df["Close"].ewm(span=21, adjust=False).mean()
-        df["EMA_50"] = df["Close"].ewm(span=50, adjust=False).mean()
-
-        cum_vol = df["Volume"].cumsum().replace(0, 1)
-        cum_pv = (df["Close"] * df["Volume"]).cumsum()
-        df["VWAP"] = cum_pv / cum_vol
-        df["VWAP_Std"] = (df["Close"] - df["VWAP"]).rolling(20).std().fillna(1.0)
-        df["VWAP_Upper"] = df["VWAP"] + (2.0 * df["VWAP_Std"])
-        df["VWAP_Lower"] = df["VWAP"] - (2.0 * df["VWAP_Std"])
-        df["VWAP_ZScore"] = (df["Close"] - df["VWAP"]) / df["VWAP_Std"].replace(0, 1)
-
-        delta = df["Close"].diff()
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
-        avg_gain = gain.rolling(14).mean()
-        avg_loss = loss.rolling(14).mean().replace(0, 1e-5)
-        rs = avg_gain / avg_loss
-        df["RSI_14"] = 100 - (100 / (1 + rs))
-
-        tr1 = df["High"] - df["Low"]
-        tr2 = (df["High"] - df["Close"].shift(1)).abs()
-        tr3 = (df["Low"] - df["Close"].shift(1)).abs()
-        df["ATR_14"] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1).rolling(14).mean().fillna(0.5)
-
-        df["BOS_Bullish"] = (df["Close"] > df["High"].rolling(10).max().shift(1)).astype(int)
-        df["BOS_Bearish"] = (df["Close"] < df["Low"].rolling(10).min().shift(1)).astype(int)
-        df["Bullish_FVG"] = ((df["Low"] > df["High"].shift(2)) & (df["Close"].shift(1) > df["High"].shift(2))).astype(int)
-        df["Bearish_FVG"] = ((df["High"] < df["Low"].shift(2)) & (df["Close"].shift(1) < df["Low"].shift(2))).astype(int)
-
-        up_ticks = (df["Close"] >= df["Open"]).astype(int)
-        df["Volume_Delta"] = np.where(up_ticks, df["Volume"], -df["Volume"])
-        df["CVD"] = df["Volume_Delta"].cumsum()
-        df["RVOL"] = df["Volume"] / df["Volume"].rolling(20).mean().replace(0, 1)
-
-        timestamps = df["Timestamp"].astype("int64") // 10**9
-        lunar_seconds = 29.53059 * 86400
-        df["Lunar_Phase_Sin"] = np.sin(2 * np.pi * (timestamps % lunar_seconds) / lunar_seconds)
-        df["Lunar_Phase_Cos"] = np.cos(2 * np.pi * (timestamps % lunar_seconds) / lunar_seconds)
-
-        slope_10 = (df["Close"] - df["Close"].shift(10)) / df["Close"].shift(10).replace(0, 1)
-        vol_mean = df["ATR_14"].rolling(30).mean().fillna(df["ATR_14"])
-        df["Regime"] = np.where(df["ATR_14"] > vol_mean,
-                                np.where(slope_10 > 0.002, "Trending_Bullish", np.where(slope_10 < -0.002, "Trending_Bearish", "High_Vol_Choppy")),
-                                "Low_Vol_Consolidation")
-
-        return df.bfill().fillna(0)
-
-# =====================================================================
-# 4. MICROSTRUCTURE AUTONOMOUS QUANT BRAIN
-# =====================================================================
-class AutonomousQuantBrain:
-    def __init__(self):
-        self.models = {}
-        self.scalers = {}
-        self.feature_cols = [
-            "EMA_9", "EMA_21", "VWAP_ZScore", "RSI_14", "ATR_14", 
-            "BOS_Bullish", "BOS_Bearish", "Bullish_FVG", "Bearish_FVG", 
-            "Volume_Delta", "RVOL", "Lunar_Phase_Sin", "Lunar_Phase_Cos",
-            "Order_Imbalance", "Microprice_Spread"
-        ]
-        self.pending_audit_memory = []
-
-    def fit_model(self, token, df):
-        clean_df = df.dropna().copy()
-        if len(clean_df) < 20:
-            return False
-        clean_df["Target_Next_Close"] = clean_df["Close"].shift(-1)
-        train_set = clean_df.dropna()
-
-        for c in ["Order_Imbalance", "Microprice_Spread"]:
-            if c not in train_set.columns:
-                train_set[c] = 0.0
-
-        X = train_set[self.feature_cols]
-        y = train_set["Target_Next_Close"]
-
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-        model = GradientBoostingRegressor(n_estimators=45, learning_rate=0.05, max_depth=4, random_state=42)
-        model.fit(X_scaled, y)
-
-        self.models[token] = model
-        self.scalers[token] = scaler
-        return True
-
-    def predict_and_store_horizons(self, token, df, live_ltp, l2_imbalance=0.0, microprice=0.0, horizon_minutes=10):
-        if df.empty:
-            return pd.DataFrame()
-        if token not in self.models:
-            self.fit_model(token, df)
-
-        latest_row = df.iloc[-1].copy()
-        predictions = []
-        curr_close = live_ltp if live_ltp > 0 else float(latest_row["Close"])
-        curr_vol = float(latest_row["Volume"])
-        atr = float(latest_row["ATR_14"]) if latest_row["ATR_14"] > 0 else max(0.2, curr_close * 0.003)
-        now_time = datetime.now(IST)
-
-        trend_bias = -1.0 if "Bearish" in str(latest_row["Regime"]) else (1.0 if "Bullish" in str(latest_row["Regime"]) else 0.0)
-        order_bias = np.clip(l2_imbalance, -1.0, 1.0)
-        micro_spread = (microprice - curr_close) if microprice > 0 else 0.0
-
-        curr_ema9 = float(latest_row["EMA_9"])
-        curr_ema21 = float(latest_row["EMA_21"])
-        curr_rsi = float(latest_row["RSI_14"])
-
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        cursor = conn.cursor()
-
-        for step in range(1, horizon_minutes + 1):
-            pred_time = now_time + timedelta(minutes=step)
-            x_vec = pd.DataFrame([{
-                "EMA_9": curr_ema9, "EMA_21": curr_ema21,
-                "VWAP_ZScore": float(latest_row["VWAP_ZScore"]),
-                "RSI_14": curr_rsi, "ATR_14": atr,
-                "BOS_Bullish": int(latest_row["BOS_Bullish"]),
-                "BOS_Bearish": int(latest_row["BOS_Bearish"]),
-                "Bullish_FVG": int(latest_row["Bullish_FVG"]),
-                "Bearish_FVG": int(latest_row["Bearish_FVG"]),
-                "Volume_Delta": float(latest_row["Volume_Delta"]),
-                "RVOL": float(latest_row["RVOL"]),
-                "Lunar_Phase_Sin": float(latest_row["Lunar_Phase_Sin"]),
-                "Lunar_Phase_Cos": float(latest_row["Lunar_Phase_Cos"]),
-                "Order_Imbalance": order_bias,
-                "Microprice_Spread": micro_spread
-            }])
-
-"""
-AUTONOMOUS MULTI-ASSET QUANTITATIVE AI TRADING SYSTEM (V10 - PRO AUTONOMOUS WORKSTATION)
-=======================================================================================
-Features:
-- Watchlist integration: Up to 50 instruments actively synced to the Self-Learning engine.
-- Dual Data Matrix: Switch between Live Per-Second L2 Depth (25 cols) & Historical Candles.
-- Distinct Green Predicted Horizon for upcoming minutes (T+1 to T+10).
-- Side-by-Side Predicted vs Realized price comparison for continuous self-learning.
-- 24/7 Background Daemon for non-stop tick ingestion, queuing, and online weight rebalancing.
-"""
-
-import os
-import io
-import time
-import math
-import json
-import sqlite3
-import urllib.request
-import threading
-from datetime import datetime, timezone, timedelta
-
-import numpy as np
-import pandas as pd
-import streamlit as st
-import plotly.graph_objects as go
-
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.preprocessing import StandardScaler
-
-import pyotp
-from SmartApi import SmartConnect
-from SmartApi.smartWebSocketV2 import SmartWebSocketV2
-
-# =====================================================================
-# SYSTEM CONFIGURATION & INDIAN TIMEZONE (IST)
-# =====================================================================
-st.set_page_config(
-    page_title="Omni-Regime Autonomous Quant Engine",
-    page_icon="⚡",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-IST = timezone(timedelta(hours=5, minutes=30))
-DB_PATH = "market_memory_master.db"
-
-DEFAULT_API_KEY = "C1OmpYQf"
-DEFAULT_CLIENT_CODE = "V169656"
-DEFAULT_PIN = "2000"
-DEFAULT_TOTP_SECRET = "PAMVHWB26NCO7P773O5GBIQQLE"
-
-# =====================================================================
-# 1. DATABASE LAYER (PERSISTENT MULTI-ASSET ARCHIVE)
-# =====================================================================
-def init_database():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS l2_depth_ticks (
-            timestamp TEXT,
-            exchange TEXT,
-            token TEXT,
-            ltp REAL,
-            microprice REAL,
-            imbalance REAL,
-            bid1 REAL, bidq1 INTEGER,
-            bid2 REAL, bidq2 INTEGER,
-            bid3 REAL, bidq3 INTEGER,
-            bid4 REAL, bidq4 INTEGER,
-            bid5 REAL, bidq5 INTEGER,
-            ask1 REAL, askq1 INTEGER,
-            ask2 REAL, askq2 INTEGER,
-            ask3 REAL, askq3 INTEGER,
-            ask4 REAL, askq4 INTEGER,
-            ask5 REAL, askq5 INTEGER,
-            total_buy_qty INTEGER,
-            total_sell_qty INTEGER
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS historical_minute_candles (
-            timestamp TEXT,
-            exchange TEXT,
-            token TEXT,
-            open REAL,
-            high REAL,
-            low REAL,
-            close REAL,
-            volume INTEGER,
-            PRIMARY KEY (token, timestamp)
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS learning_ledger (
-            evaluated_at TEXT,
-            token TEXT,
-            step TEXT,
-            predicted_price REAL,
-            actual_realized_price REAL,
-            error_diff_inr REAL,
-            pct_error REAL,
-            adaptation_action TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS active_predictions (
-            token TEXT,
-            step TEXT,
-            target_timestamp TEXT,
-            predicted_open REAL,
-            predicted_high REAL,
-            predicted_low REAL,
-            predicted_close REAL,
-            predicted_volume INTEGER,
-            PRIMARY KEY (token, step)
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-init_database()
-
-# =====================================================================
-# 2. BROKER CONNECTOR & INSTRUMENT SCRIP MASTER
+# 2. BROKER CONNECTOR & SCRIP MASTER
 # =====================================================================
 class SmartApiConnector:
     def __init__(self, api_key, client_code, pin, totp_secret):
@@ -685,9 +370,9 @@ class AutonomousQuantBrain:
             }
             predictions.append(row_pred)
 
-            cursor.execute('''
+            cursor.execute("""
                 INSERT OR REPLACE INTO active_predictions VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (token, f"T+{step}", row_pred["Timestamp"], p_open, p_high, p_low, p_close, p_vol))
+            """, (token, f"T+{step}", row_pred["Timestamp"], p_open, p_high, p_low, p_close, p_vol))
 
             self.pending_audit_memory.append({
                 "token": token,
@@ -720,9 +405,18 @@ class AutonomousQuantBrain:
                 pct_error = round((error / actual_ltp) * 100, 2) if actual_ltp > 0 else 0
                 status = "PRECISE_HIT" if pct_error <= 0.5 else "REBALANCE_WEIGHTS"
 
-                cursor.execute('''
-                    INSERT INTO learning_ledger VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (now.strftime("%H:%M:%S"), token, item["step"], item["predicted_price"], actual_ltp, error, pct_error, status))
+                # Check available columns to insert safely
+                cursor.execute("PRAGMA table_info(learning_ledger)")
+                cols = [r[1] for r in cursor.fetchall()]
+                if "actual_realized_price" in cols:
+                    cursor.execute("""
+                        INSERT INTO learning_ledger (evaluated_at, token, step, predicted_price, actual_realized_price, error_diff_inr, pct_error, adaptation_action)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (now.strftime("%H:%M:%S"), token, item["step"], item["predicted_price"], actual_ltp, error, pct_error, status))
+                else:
+                    cursor.execute("""
+                        INSERT INTO learning_ledger VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (now.strftime("%H:%M:%S"), token, item["step"], item["predicted_price"], actual_ltp, error, pct_error, status))
 
                 if token in self.models and item.get("feature_snapshot") is not None:
                     try:
@@ -749,7 +443,7 @@ class GlobalAutonomousWorker:
         self.active_watchlist = []
         self.connector = None
         self.lock = threading.Lock()
-        self.last_minute_cycle = 0
+        self.last_minute_cycle = -1
 
     def start(self, connector, watchlist):
         self.connector = connector
@@ -793,9 +487,9 @@ class GlobalAutonomousWorker:
                     imbalance = round((bq_tot - aq_tot) / (bq_tot + aq_tot), 4)
                     microprice = round(((b1 * aq_tot) + (a1 * bq_tot)) / (bq_tot + aq_tot), 2)
 
-                    cursor.execute('''
+                    cursor.execute("""
                         INSERT INTO l2_depth_ticks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
+                    """, (
                         now_str, exch, tok, ltp, microprice, imbalance,
                         b1, 200, round(b1 - spread, 2), 400, round(b1 - 2*spread, 2), 600, round(b1 - 3*spread, 2), 800, round(b1 - 4*spread, 2), 1000,
                         a1, 150, round(a1 + spread, 2), 350, round(a1 + 2*spread, 2), 550, round(a1 + 3*spread, 2), 750, round(a1 + 4*spread, 2), 950,
@@ -809,11 +503,10 @@ class GlobalAutonomousWorker:
                     if curr_min != self.last_minute_cycle:
                         hist_df = self.connector.fetch_historical(exch, tok, days=2)
                         if not hist_df.empty:
-                            # Save historical candles to SQLite
                             for _, r in hist_df.tail(60).iterrows():
-                                cursor.execute('''
+                                cursor.execute("""
                                     INSERT OR REPLACE INTO historical_minute_candles VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                ''', (r["Timestamp"].strftime("%Y-%m-%d %H:%M"), exch, tok, r["Open"], r["High"], r["Low"], r["Close"], r["Volume"]))
+                                """, (r["Timestamp"].strftime("%Y-%m-%d %H:%M"), exch, tok, r["Open"], r["High"], r["Low"], r["Close"], r["Volume"]))
 
                             f_df = MultiModalFeatureEngine.extract_features(hist_df)
                             GLOBAL_QUANT_BRAIN.predict_and_store_horizons(
@@ -933,7 +626,6 @@ with tab_learning:
     if not active_tokens_info:
         st.warning("Pehle Tab 1 me jakar instruments add karein taaki self-learning matrix load ho sake.")
     else:
-        # 1. Target Selector from Watchlist
         inspect_label = st.selectbox("🎯 Select Tracked Asset to Inspect:", [x["label"] for x in active_tokens_info])
         sel_meta = [x for x in active_tokens_info if x["label"] == inspect_label][0]
         curr_token = sel_meta["token"]
@@ -951,7 +643,6 @@ with tab_learning:
         
         live_preds = pd.read_sql("SELECT * FROM active_predictions WHERE token = ? ORDER BY step ASC", conn, params=(curr_token,))
         
-        # Instant predict if table empty
         if live_preds.empty:
             hist_df = agent_conn.fetch_historical(curr_exch, curr_token, days=2)
             if not hist_df.empty:
@@ -967,23 +658,31 @@ with tab_learning:
             styled_df = live_preds[["step", "target_timestamp", "predicted_open", "predicted_high", "predicted_low", "predicted_close", "predicted_volume"]]
             st.dataframe(
                 styled_df.style.set_properties(**{
-                    'background-color': '#0d2818',
-                    'color': '#00FFA3',
-                    'border-color': '#00FFA3'
+                    "background-color": "#0d2818",
+                    "color": "#00FFA3",
+                    "border-color": "#00FFA3"
                 }),
                 use_container_width=True
             )
         else:
             st.info("Compiling prediction horizon for this instrument...")
 
-        # 3. SIDE-BY-SIDE SELF-LEARNING & CORRECTION LEDGER
+        # 3. SIDE-BY-SIDE SELF-LEARNING & CORRECTION LEDGER (SAFE AUTO-SCHEMA LOAD)
         st.markdown("### ⚖️ Side-by-Side Reality vs Prediction Comparison (Self-Correction Ledger)")
         st.caption("Compares expired forecasts with real market prices. Models continuously rebalance weights upon deviation.")
 
-        ledger_df = pd.read_sql("SELECT evaluated_at, step, predicted_price, actual_realized_price, error_diff_inr, pct_error, adaptation_action FROM learning_ledger WHERE token = ? ORDER BY rowid DESC LIMIT 30", conn, params=(curr_token,))
+        # Query all columns safely without hardcoding names that fail on legacy tables
+        raw_ledger = pd.read_sql("SELECT * FROM learning_ledger WHERE token = ? ORDER BY rowid DESC LIMIT 30", conn, params=(curr_token,))
         
-        if not ledger_df.empty:
-            st.dataframe(ledger_df, use_container_width=True)
+        if not raw_ledger.empty:
+            rename_map = {
+                "actual_price": "actual_realized_price",
+                "error_inr": "error_diff_inr",
+                "status": "adaptation_action"
+            }
+            raw_ledger = raw_ledger.rename(columns=rename_map)
+            disp_cols = [c for c in ["evaluated_at", "step", "predicted_price", "actual_realized_price", "error_diff_inr", "pct_error", "adaptation_action"] if c in raw_ledger.columns]
+            st.dataframe(raw_ledger[disp_cols], use_container_width=True)
         else:
             st.info(f"Token {curr_token} ke liye monitoring chalu hai. Agla 1 minute complete hote hi pehli audit row yahan populate ho jayegi.")
 
