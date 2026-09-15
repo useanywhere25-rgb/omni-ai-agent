@@ -1,5 +1,5 @@
 """
-Omni-Regime Autonomous AI Trading Agent (V11 - Production Auto-Migrated)
+Omni-Regime Autonomous AI Trading Agent (V12 - Bulletproof Auto-Migration)
 """
 
 import os
@@ -43,20 +43,20 @@ DEFAULT_PIN = "2000"
 DEFAULT_TOTP_SECRET = "PAMVHWB26NCO7P773O5GBIQQLE"
 
 # =====================================================================
-# 1. DATABASE LAYER WITH AUTOMATIC SCHEMA MIGRATION (NO CRASH EVER)
+# 1. DATABASE LAYER WITH 100% BULLETPROOF AUTO-MIGRATION
 # =====================================================================
 def init_database():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     cursor = conn.cursor()
     
+    # 1. Base Tables Creation
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS l2_depth_ticks (
             timestamp TEXT,
             exchange TEXT,
             token TEXT,
             ltp REAL,
-            microprice REAL,
-            imbalance REAL,
+            volume INTEGER,
             bid1 REAL, bidq1 INTEGER,
             bid2 REAL, bidq2 INTEGER,
             bid3 REAL, bidq3 INTEGER,
@@ -99,25 +99,6 @@ def init_database():
         )
     """)
     
-    # Auto-migration if learning_ledger was created with older column names
-    cursor.execute("PRAGMA table_info(learning_ledger)")
-    existing_cols = [row[1] for row in cursor.fetchall()]
-    if "actual_realized_price" not in existing_cols:
-        try:
-            cursor.execute("ALTER TABLE learning_ledger ADD COLUMN actual_realized_price REAL")
-        except Exception:
-            pass
-    if "error_diff_inr" not in existing_cols:
-        try:
-            cursor.execute("ALTER TABLE learning_ledger ADD COLUMN error_diff_inr REAL")
-        except Exception:
-            pass
-    if "adaptation_action" not in existing_cols:
-        try:
-            cursor.execute("ALTER TABLE learning_ledger ADD COLUMN adaptation_action TEXT")
-        except Exception:
-            pass
-            
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS active_predictions (
             token TEXT,
@@ -131,6 +112,40 @@ def init_database():
             PRIMARY KEY (token, step)
         )
     """)
+    
+    # --- Auto-Migration for l2_depth_ticks (Fixes Line 695 Error) ---
+    cursor.execute("PRAGMA table_info(l2_depth_ticks)")
+    l2_cols = [row[1] for row in cursor.fetchall()]
+    if "microprice" not in l2_cols:
+        try:
+            cursor.execute("ALTER TABLE l2_depth_ticks ADD COLUMN microprice REAL DEFAULT 0.0")
+        except Exception:
+            pass
+    if "imbalance" not in l2_cols:
+        try:
+            cursor.execute("ALTER TABLE l2_depth_ticks ADD COLUMN imbalance REAL DEFAULT 0.0")
+        except Exception:
+            pass
+
+    # --- Auto-Migration for learning_ledger (Fixes Line 583 Error) ---
+    cursor.execute("PRAGMA table_info(learning_ledger)")
+    ll_cols = [row[1] for row in cursor.fetchall()]
+    if "actual_realized_price" not in ll_cols:
+        try:
+            cursor.execute("ALTER TABLE learning_ledger ADD COLUMN actual_realized_price REAL")
+        except Exception:
+            pass
+    if "error_diff_inr" not in ll_cols:
+        try:
+            cursor.execute("ALTER TABLE learning_ledger ADD COLUMN error_diff_inr REAL")
+        except Exception:
+            pass
+    if "adaptation_action" not in ll_cols:
+        try:
+            cursor.execute("ALTER TABLE learning_ledger ADD COLUMN adaptation_action TEXT")
+        except Exception:
+            pass
+            
     conn.commit()
     conn.close()
 
@@ -405,7 +420,6 @@ class AutonomousQuantBrain:
                 pct_error = round((error / actual_ltp) * 100, 2) if actual_ltp > 0 else 0
                 status = "PRECISE_HIT" if pct_error <= 0.5 else "REBALANCE_WEIGHTS"
 
-                # Check available columns to insert safely
                 cursor.execute("PRAGMA table_info(learning_ledger)")
                 cols = [r[1] for r in cursor.fetchall()]
                 if "actual_realized_price" in cols:
@@ -488,7 +502,12 @@ class GlobalAutonomousWorker:
                     microprice = round(((b1 * aq_tot) + (a1 * bq_tot)) / (bq_tot + aq_tot), 2)
 
                     cursor.execute("""
-                        INSERT INTO l2_depth_ticks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO l2_depth_ticks (
+                            timestamp, exchange, token, ltp, microprice, imbalance,
+                            bid1, bidq1, bid2, bidq2, bid3, bidq3, bid4, bidq4, bid5, bidq5,
+                            ask1, askq1, ask2, askq2, ask3, askq3, ask4, askq4, ask5, askq5,
+                            total_buy_qty, total_sell_qty
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         now_str, exch, tok, ltp, microprice, imbalance,
                         b1, 200, round(b1 - spread, 2), 400, round(b1 - 2*spread, 2), 600, round(b1 - 3*spread, 2), 800, round(b1 - 4*spread, 2), 1000,
@@ -667,11 +686,10 @@ with tab_learning:
         else:
             st.info("Compiling prediction horizon for this instrument...")
 
-        # 3. SIDE-BY-SIDE SELF-LEARNING & CORRECTION LEDGER (SAFE AUTO-SCHEMA LOAD)
+        # 3. SIDE-BY-SIDE SELF-LEARNING & CORRECTION LEDGER
         st.markdown("### ⚖️ Side-by-Side Reality vs Prediction Comparison (Self-Correction Ledger)")
         st.caption("Compares expired forecasts with real market prices. Models continuously rebalance weights upon deviation.")
 
-        # Query all columns safely without hardcoding names that fail on legacy tables
         raw_ledger = pd.read_sql("SELECT * FROM learning_ledger WHERE token = ? ORDER BY rowid DESC LIMIT 30", conn, params=(curr_token,))
         
         if not raw_ledger.empty:
@@ -686,18 +704,24 @@ with tab_learning:
         else:
             st.info(f"Token {curr_token} ke liye monitoring chalu hai. Agla 1 minute complete hote hi pehli audit row yahan populate ho jayegi.")
 
-        # 4. DUAL DATA MATRIX SELECTOR (HISTORICAL PER-MINUTE VS LIVE PER-SECOND)
+        # 4. DUAL DATA MATRIX SELECTOR (SAFE QUERY)
         st.markdown("### 🗄️ Ingested Data Feed Matrix (Historical vs Live Per-Second)")
         data_view_mode = st.radio("Select Ingestion Matrix to View:", ["⚡ Live Per-Second L2 Depth (25 Columns)", "📊 Historical Per-Minute Bars (Database Cache)"], horizontal=True)
 
         if "Live Per-Second" in data_view_mode:
             st.caption("Latest 30 seconds of high-frequency L2 order depth captured directly from exchange.")
-            l2_feed = pd.read_sql("SELECT timestamp, ltp, microprice, imbalance, bid1, bidq1, ask1, askq1, total_buy_qty, total_sell_qty FROM l2_depth_ticks WHERE token = ? ORDER BY rowid DESC LIMIT 30", conn, params=(curr_token,))
-            st.dataframe(l2_feed, use_container_width=True)
+            l2_feed = pd.read_sql("SELECT * FROM l2_depth_ticks WHERE token = ? ORDER BY rowid DESC LIMIT 30", conn, params=(curr_token,))
+            if not l2_feed.empty:
+                st.dataframe(l2_feed, use_container_width=True)
+            else:
+                st.info("Background daemon is streaming ticks into SQLite. Stand by...")
         else:
             st.caption("1-Minute OHLCV bars ingested and cached in SQLite master memory.")
-            hist_feed = pd.read_sql("SELECT timestamp, open, high, low, close, volume FROM historical_minute_candles WHERE token = ? ORDER BY timestamp DESC LIMIT 30", conn, params=(curr_token,))
-            st.dataframe(hist_feed, use_container_width=True)
+            hist_feed = pd.read_sql("SELECT * FROM historical_minute_candles WHERE token = ? ORDER BY timestamp DESC LIMIT 30", conn, params=(curr_token,))
+            if not hist_feed.empty:
+                st.dataframe(hist_feed, use_container_width=True)
+            else:
+                st.info("Historical candle cache is building in background. Stand by...")
 
         conn.close()
 
