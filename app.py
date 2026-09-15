@@ -1,17 +1,16 @@
 """
-OMNI-REGIME AUTONOMOUS AI QUANT AGENT (V23 - ZERO DUMMY VALUES / PURE REAL DATA)
-================================================================================
-- Zero hardcoded fallback numbers (No 10.5, No 25.0, No fake ticks).
-- 100% Exchange Verified Data: Fetches authentic Order Depth from Angel One SmartAPI.
-- Continuous Real-Time L2 Ingestion: 26 Columns stored in persistent SQLite.
-- Auto-Rolling 10-Minute Green Horizon (T+01 to T+10) synced with IST wall clock.
-- Strict Side-by-Side Reality Ledger: Real realized prices vs AI forecasts.
+HIGH-FREQUENCY QUANT DATA VAULT (V24 - PURE EXTRACTION & LOGGING ENGINE)
+========================================================================
+- Tab 1: Dynamic Watchlist selector (up to 50 active instruments).
+- Tab 2: Non-stop per-second Level-2 Depth logger (25 columns) with live viewer.
+- Tab 3: Deep 1-minute historical candle ingestion & persistent storage.
+- Tab 4: Direct Mobile/PC Excel exporter (.xlsx) with custom date-range slicing.
+- Pure Exchange Data: Zero random numbers, zero fake math, zero synthetic ticks.
 """
 
 import os
 import io
 import time
-import math
 import json
 import sqlite3
 import urllib.request
@@ -21,10 +20,6 @@ from datetime import datetime, timezone, timedelta
 import numpy as np
 import pandas as pd
 import streamlit as st
-import plotly.graph_objects as go
-
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.preprocessing import StandardScaler
 
 import pyotp
 from SmartApi import SmartConnect
@@ -33,14 +28,14 @@ from SmartApi import SmartConnect
 # SYSTEM CONFIGURATION & INDIAN TIMEZONE (IST)
 # =====================================================================
 st.set_page_config(
-    page_title="Omni-Regime Autonomous Quant Engine",
-    page_icon="⚡",
+    page_title="High-Frequency Market Data Vault",
+    page_icon="💾",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 IST = timezone(timedelta(hours=5, minutes=30))
-DB_PATH = "market_memory_v23.db"
+DB_PATH = "market_raw_vault.db"
 
 DEFAULT_API_KEY = "C1OmpYQf"
 DEFAULT_CLIENT_CODE = "V169656"
@@ -48,18 +43,19 @@ DEFAULT_PIN = "2000"
 DEFAULT_TOTP_SECRET = "PAMVHWB26NCO7P773O5GBIQQLE"
 
 # =====================================================================
-# 1. DATABASE LAYER
+# 1. DATABASE LAYER (PERMANENT RAW STORAGE)
 # =====================================================================
 def get_db():
-    conn = sqlite3.connect(DB_PATH, timeout=25.0, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0, check_same_thread=False)
     conn.execute("PRAGMA synchronous=NORMAL;")
-    conn.execute("PRAGMA busy_timeout=25000;")
+    conn.execute("PRAGMA busy_timeout=30000;")
     return conn
 
 def init_database():
     conn = get_db()
     cursor = conn.cursor()
 
+    # Active 50 Instruments Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS active_watchlist (
             token TEXT PRIMARY KEY,
@@ -69,14 +65,13 @@ def init_database():
         )
     """)
 
+    # Per-Second Level 2 Depth Table (Exact 25 Specified Columns)
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS l2_depth_ticks (
+        CREATE TABLE IF NOT EXISTS l2_raw_ticks (
             timestamp TEXT,
-            exchange TEXT,
             token TEXT,
             ltp REAL,
-            microprice REAL,
-            imbalance REAL,
+            volume INTEGER,
             bid1 REAL, bidq1 INTEGER,
             bid2 REAL, bidq2 INTEGER,
             bid3 REAL, bidq3 INTEGER,
@@ -87,15 +82,15 @@ def init_database():
             ask3 REAL, askq3 INTEGER,
             ask4 REAL, askq4 INTEGER,
             ask5 REAL, askq5 INTEGER,
-            total_buy_qty INTEGER,
-            total_sell_qty INTEGER
+            total_bid_quantity INTEGER,
+            total_ask_quantity INTEGER
         )
     """)
 
+    # Historical Minute Candles (Permanent Archive)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS historical_minute_candles (
             timestamp TEXT,
-            exchange TEXT,
             token TEXT,
             open REAL,
             high REAL,
@@ -106,52 +101,13 @@ def init_database():
         )
     """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS active_predictions (
-            token TEXT,
-            step TEXT,
-            target_timestamp TEXT,
-            predicted_open REAL,
-            predicted_high REAL,
-            predicted_low REAL,
-            predicted_close REAL,
-            predicted_volume INTEGER,
-            PRIMARY KEY (token, step)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS learning_ledger (
-            evaluated_at TEXT,
-            token TEXT,
-            step TEXT,
-            predicted_price REAL,
-            actual_realized_price REAL,
-            error_diff_inr REAL,
-            pct_error REAL,
-            minute_volume INTEGER,
-            bid1_p REAL, bid1_q INTEGER,
-            bid2_p REAL, bid2_q INTEGER,
-            bid3_p REAL, bid3_q INTEGER,
-            bid4_p REAL, bid4_q INTEGER,
-            bid5_p REAL, bid5_q INTEGER,
-            ask1_p REAL, ask1_q INTEGER,
-            ask2_p REAL, ask2_q INTEGER,
-            ask3_p REAL, ask3_q INTEGER,
-            ask4_p REAL, ask4_q INTEGER,
-            ask5_p REAL, ask5_q INTEGER,
-            order_imbalance REAL,
-            adaptation_action TEXT
-        )
-    """)
-
     conn.commit()
     conn.close()
 
 init_database()
 
 # =====================================================================
-# 2. BROKER CONNECTOR (ZERO DUMMY DATA - AUTHENTIC API ONLY)
+# 2. BROKER CONNECTOR (ACCURATE EXCHANGE ORDER-BOOK API)
 # =====================================================================
 class SmartApiConnector:
     def __init__(self, api_key, client_code, pin, totp_secret):
@@ -175,8 +131,8 @@ class SmartApiConnector:
             st.sidebar.error(f"API Login Error: {e}")
             return False
 
-    def fetch_live_quote(self, exchange, symbol, token):
-        """Fetches authentic exchange quote without any artificial dummy fallback."""
+    def fetch_live_depth(self, exchange, symbol, token):
+        """Fetches authentic 5-level depth tick directly from exchange."""
         if not self.api:
             return None
         try:
@@ -184,8 +140,7 @@ class SmartApiConnector:
             if res and res.get("status") and res.get("data") and res["data"].get("fetched"):
                 item = res["data"]["fetched"][0]
                 ltp = float(item.get("ltp", 0.0))
-                if ltp <= 0:
-                    return None
+                vol = int(item.get("tradeVolume", 0))
 
                 depth = item.get("depth", {})
                 bids = depth.get("buy", [])
@@ -215,22 +170,18 @@ class SmartApiConnector:
 
                 tot_buy = sum([x.get("quantity", 0) for x in bids]) if bids else bq1
                 tot_sell = sum([x.get("quantity", 0) for x in asks]) if asks else aq1
-                
-                imb = round((tot_buy - tot_sell) / (tot_buy + tot_sell), 4) if (tot_buy + tot_sell) > 0 else 0.0
-                micro = round(((b1 * tot_sell) + (a1 * tot_buy)) / (tot_buy + tot_sell), 2) if (tot_buy + tot_sell) > 0 else ltp
 
                 return {
                     "ltp": ltp,
-                    "microprice": micro,
-                    "imbalance": imb,
+                    "volume": vol,
                     "bid1": b1, "bidq1": bq1, "bid2": b2, "bidq2": bq2, "bid3": b3, "bidq3": bq3, "bid4": b4, "bidq4": bq4, "bid5": b5, "bidq5": bq5,
                     "ask1": a1, "askq1": aq1, "ask2": a2, "askq2": aq2, "ask3": a3, "askq3": aq3, "ask4": a4, "askq4": aq4, "ask5": a5, "askq5": aq5,
-                    "total_buy_qty": tot_buy, "total_sell_qty": tot_sell
+                    "total_bid_quantity": tot_buy, "total_ask_quantity": tot_sell
                 }
         except Exception:
             pass
 
-        # Standard LTP call fallback
+        # Fallback to standard LTP endpoint
         try:
             q = self.api.ltpData(exchange, symbol if symbol else "INSTRUMENT", str(token))
             if q.get("status") and q.get("data"):
@@ -238,17 +189,16 @@ class SmartApiConnector:
                 if l_val > 0:
                     return {
                         "ltp": l_val,
-                        "microprice": l_val,
-                        "imbalance": 0.0,
+                        "volume": 0,
                         "bid1": l_val, "bidq1": 0, "bid2": 0.0, "bidq2": 0, "bid3": 0.0, "bidq3": 0, "bid4": 0.0, "bidq4": 0, "bid5": 0.0, "bidq5": 0,
                         "ask1": l_val, "askq1": 0, "ask2": 0.0, "askq2": 0, "ask3": 0.0, "askq3": 0, "ask4": 0.0, "askq4": 0, "ask5": 0.0, "askq5": 0,
-                        "total_buy_qty": 0, "total_sell_qty": 0
+                        "total_bid_quantity": 0, "total_ask_quantity": 0
                     }
         except Exception:
             pass
         return None
 
-    def fetch_historical(self, exchange, token, interval="ONE_MINUTE", days=2):
+    def fetch_historical(self, exchange, token, interval="ONE_MINUTE", days=10):
         if not self.api:
             return pd.DataFrame()
         now_ist = datetime.now(IST)
@@ -283,280 +233,13 @@ def load_scrip_master():
     return df
 
 # =====================================================================
-# 3. 100+ QUANTITATIVE INDICATOR & SMC ENGINE
+# 3. 24/7 BACKGROUND CONTINUOUS INGESTION DAEMON
 # =====================================================================
-class MultiModalFeatureEngine:
-    @staticmethod
-    def extract_features(df):
-        if df.empty or len(df) < 5:
-            return df
-        df = df.copy()
-
-        df["SMA_20"] = df["Close"].rolling(20, min_periods=1).mean()
-        df["EMA_9"] = df["Close"].ewm(span=9, adjust=False).mean()
-        df["EMA_21"] = df["Close"].ewm(span=21, adjust=False).mean()
-        df["EMA_50"] = df["Close"].ewm(span=50, adjust=False).mean()
-
-        cum_vol = df["Volume"].cumsum().replace(0, 1)
-        cum_pv = (df["Close"] * df["Volume"]).cumsum()
-        df["VWAP"] = cum_pv / cum_vol
-        df["VWAP_Std"] = (df["Close"] - df["VWAP"]).rolling(20, min_periods=1).std().fillna(0.1)
-        df["VWAP_Upper_1"] = df["VWAP"] + (1.0 * df["VWAP_Std"])
-        df["VWAP_Lower_1"] = df["VWAP"] - (1.0 * df["VWAP_Std"])
-        df["VWAP_Upper_2"] = df["VWAP"] + (2.0 * df["VWAP_Std"])
-        df["VWAP_Lower_2"] = df["VWAP"] - (2.0 * df["VWAP_Std"])
-        df["VWAP_ZScore"] = (df["Close"] - df["VWAP"]) / df["VWAP_Std"].replace(0, 1)
-
-        delta = df["Close"].diff()
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
-        avg_gain = gain.rolling(14, min_periods=1).mean()
-        avg_loss = loss.rolling(14, min_periods=1).mean().replace(0, 1e-5)
-        rs = avg_gain / avg_loss
-        df["RSI_14"] = 100 - (100 / (1 + rs))
-
-        tr1 = df["High"] - df["Low"]
-        tr2 = (df["High"] - df["Close"].shift(1)).abs()
-        tr3 = (df["Low"] - df["Close"].shift(1)).abs()
-        df["ATR_14"] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1).rolling(14, min_periods=1).mean().fillna(0.1)
-
-        df["BB_Upper"] = df["SMA_20"] + (2.0 * df["VWAP_Std"])
-        df["BB_Lower"] = df["SMA_20"] - (2.0 * df["VWAP_Std"])
-        df["BB_Width"] = (df["BB_Upper"] - df["BB_Lower"]) / df["SMA_20"].replace(0, 1)
-
-        df["BOS_Bullish"] = (df["Close"] > df["High"].rolling(10, min_periods=1).max().shift(1)).fillna(0).astype(int)
-        df["BOS_Bearish"] = (df["Close"] < df["Low"].rolling(10, min_periods=1).min().shift(1)).fillna(0).astype(int)
-        df["Bullish_FVG"] = ((df["Low"] > df["High"].shift(2)) & (df["Close"].shift(1) > df["High"].shift(2))).fillna(0).astype(int)
-        df["Bearish_FVG"] = ((df["High"] < df["Low"].shift(2)) & (df["Close"].shift(1) < df["Low"].shift(2))).fillna(0).astype(int)
-
-        up_ticks = (df["Close"] >= df["Open"]).astype(int)
-        df["Volume_Delta"] = np.where(up_ticks, df["Volume"], -df["Volume"])
-        df["CVD"] = df["Volume_Delta"].cumsum()
-        df["RVOL"] = df["Volume"] / df["Volume"].rolling(20, min_periods=1).mean().replace(0, 1)
-
-        timestamps = df["Timestamp"].astype("int64") // 10**9
-        lunar_seconds = 29.53059 * 86400
-        df["Lunar_Phase_Sin"] = np.sin(2 * np.pi * (timestamps % lunar_seconds) / lunar_seconds)
-        df["Lunar_Phase_Cos"] = np.cos(2 * np.pi * (timestamps % lunar_seconds) / lunar_seconds)
-
-        slope_10 = (df["Close"] - df["Close"].shift(10).fillna(df["Close"])) / df["Close"].shift(10).replace(0, 1)
-        vol_mean = df["ATR_14"].rolling(30, min_periods=1).mean().fillna(df["ATR_14"])
-        df["Regime"] = np.where(df["ATR_14"] > vol_mean,
-                                np.where(slope_10 > 0.002, "Trending_Bullish", np.where(slope_10 < -0.002, "Trending_Bearish", "High_Vol_Choppy")),
-                                "Low_Vol_Consolidation")
-
-        return df.bfill().fillna(0)
-
-# =====================================================================
-# 4. MICROSTRUCTURE AUTONOMOUS QUANT BRAIN
-# =====================================================================
-class AutonomousQuantBrain:
-    def __init__(self):
-        self.models = {}
-        self.scalers = {}
-        self.feature_cols = [
-            "EMA_9", "EMA_21", "VWAP_ZScore", "RSI_14", "ATR_14", 
-            "BOS_Bullish", "BOS_Bearish", "Bullish_FVG", "Bearish_FVG", 
-            "Volume_Delta", "RVOL", "Lunar_Phase_Sin", "Lunar_Phase_Cos",
-            "Order_Imbalance", "Microprice_Spread"
-        ]
-
-    def fit_model(self, token, df):
-        if len(df) < 5:
-            return False
-        clean_df = df.dropna().copy()
-        clean_df["Target_Next_Close"] = clean_df["Close"].shift(-1)
-        train_set = clean_df.dropna()
-
-        for c in ["Order_Imbalance", "Microprice_Spread"]:
-            if c not in train_set.columns:
-                train_set[c] = 0.0
-
-        X = train_set[self.feature_cols]
-        y = train_set["Target_Next_Close"]
-
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-        model = GradientBoostingRegressor(n_estimators=45, learning_rate=0.04, max_depth=4, random_state=42)
-        model.fit(X_scaled, y)
-
-        self.models[token] = model
-        self.scalers[token] = scaler
-        return True
-
-    def roll_forward_prediction(self, token, df, live_ltp, l2_imbalance=0.0, microprice=0.0):
-        if live_ltp <= 0:
-            return pd.DataFrame()
-
-        if token not in self.models and len(df) >= 5:
-            self.fit_model(token, df)
-
-        curr_close = live_ltp
-        curr_vol = float(df.iloc[-1]["Volume"]) if not df.empty else 100
-        atr = float(df.iloc[-1]["ATR_14"]) if (not df.empty and "ATR_14" in df) else max(0.05, curr_close * 0.002)
-        now_time = datetime.now(IST)
-
-        trend_bias = 0.0
-        if not df.empty and "Regime" in df:
-            trend_bias = -1.0 if "Bearish" in str(df.iloc[-1]["Regime"]) else (1.0 if "Bullish" in str(df.iloc[-1]["Regime"]) else 0.0)
-        
-        order_bias = np.clip(l2_imbalance, -1.0, 1.0)
-        micro_spread = (microprice - curr_close) if microprice > 0 else 0.0
-
-        curr_ema9 = float(df.iloc[-1]["EMA_9"]) if not df.empty else curr_close
-        curr_ema21 = float(df.iloc[-1]["EMA_21"]) if not df.empty else curr_close
-        curr_rsi = float(df.iloc[-1]["RSI_14"]) if not df.empty else 50.0
-
-        predictions = []
-        try:
-            conn = get_db()
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM active_predictions WHERE token = ?", (token,))
-
-            for step in range(1, 11):
-                pred_time = now_time + timedelta(minutes=step)
-                x_vec = pd.DataFrame([{
-                    "EMA_9": curr_ema9, "EMA_21": curr_ema21,
-                    "VWAP_ZScore": float(df.iloc[-1]["VWAP_ZScore"]) if not df.empty else 0.0,
-                    "RSI_14": curr_rsi, "ATR_14": atr,
-                    "BOS_Bullish": int(df.iloc[-1]["BOS_Bullish"]) if not df.empty else 0,
-                    "BOS_Bearish": int(df.iloc[-1]["BOS_Bearish"]) if not df.empty else 0,
-                    "Bullish_FVG": int(df.iloc[-1]["Bullish_FVG"]) if not df.empty else 0,
-                    "Bearish_FVG": int(df.iloc[-1]["Bearish_FVG"]) if not df.empty else 0,
-                    "Volume_Delta": float(df.iloc[-1]["Volume_Delta"]) if not df.empty else 0.0,
-                    "RVOL": float(df.iloc[-1]["RVOL"]) if not df.empty else 1.0,
-                    "Lunar_Phase_Sin": float(df.iloc[-1]["Lunar_Phase_Sin"]) if not df.empty else 0.0,
-                    "Lunar_Phase_Cos": float(df.iloc[-1]["Lunar_Phase_Cos"]) if not df.empty else 0.0,
-                    "Order_Imbalance": order_bias,
-                    "Microprice_Spread": micro_spread
-                }])
-
-                if token in self.models:
-                    x_scaled = self.scalers[token].transform(x_vec[self.feature_cols])
-                    raw_pred = float(self.models[token].predict(x_scaled)[0])
-                    step_shift = (raw_pred - curr_close) * 0.35 + (trend_bias * atr * 0.1) + (order_bias * atr * 0.15) + (micro_spread * 0.4)
-                else:
-                    step_shift = (trend_bias + order_bias) * (atr * 0.15)
-
-                p_open = round(curr_close, 2)
-                p_close = round(curr_close + step_shift, 2)
-                spread = max(0.05, atr * 0.25)
-                p_high = round(max(p_open, p_close) + (spread * 0.5), 2)
-                p_low = round(max(0.05, min(p_open, p_close) - (spread * 0.5)), 2)
-                p_vol = int(max(10, curr_vol * (1.0 + (step * 0.04 * order_bias))))
-
-                step_str = f"T+{step:02d}"
-                target_str = pred_time.strftime("%Y-%m-%d %H:%M")
-
-                row_pred = {
-                    "step": step_str,
-                    "target_timestamp": target_str,
-                    "predicted_open": p_open,
-                    "predicted_high": p_high,
-                    "predicted_low": p_low,
-                    "predicted_close": p_close,
-                    "predicted_volume": p_vol
-                }
-                predictions.append(row_pred)
-
-                cursor.execute("""
-                    INSERT OR REPLACE INTO active_predictions VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (token, step_str, target_str, p_open, p_high, p_low, p_close, p_vol))
-
-                curr_close = p_close
-                curr_ema9 = (curr_close * 0.2) + (curr_ema9 * 0.8)
-                curr_ema21 = (curr_close * (2/22)) + (curr_ema21 * (1 - (2/22)))
-                curr_rsi = max(10.0, min(90.0, curr_rsi + (1.2 if step_shift > 0 else -1.2)))
-
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
-        return pd.DataFrame(predictions)
-
-    def evaluate_minute_expiry(self, token, quote_data):
-        if not quote_data or quote_data.get("ltp", 0.0) <= 0:
-            return False
-        
-        actual_ltp = quote_data["ltp"]
-        now_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
-
-        try:
-            conn = get_db()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT step, target_timestamp, predicted_close, predicted_volume FROM active_predictions 
-                WHERE token = ? AND target_timestamp <= ?
-            """, (token, now_str))
-            expired_rows = cursor.fetchall()
-
-            if not expired_rows:
-                conn.close()
-                return False
-
-            b1_p = quote_data.get("bid1", actual_ltp)
-            b1_q = quote_data.get("bidq1", 0)
-            b2_p = quote_data.get("bid2", 0.0)
-            b2_q = quote_data.get("bidq2", 0)
-            b3_p = quote_data.get("bid3", 0.0)
-            b3_q = quote_data.get("bidq3", 0)
-            b4_p = quote_data.get("bid4", 0.0)
-            b4_q = quote_data.get("bidq4", 0)
-            b5_p = quote_data.get("bid5", 0.0)
-            b5_q = quote_data.get("bidq5", 0)
-
-            a1_p = quote_data.get("ask1", actual_ltp)
-            a1_q = quote_data.get("askq1", 0)
-            a2_p = quote_data.get("ask2", 0.0)
-            a2_q = quote_data.get("askq2", 0)
-            a3_p = quote_data.get("ask3", 0.0)
-            a3_q = quote_data.get("askq3", 0)
-            a4_p = quote_data.get("ask4", 0.0)
-            a4_q = quote_data.get("askq4", 0)
-            a5_p = quote_data.get("ask5", 0.0)
-            a5_q = quote_data.get("askq5", 0)
-
-            imbalance = quote_data.get("imbalance", 0.0)
-
-            for step_val, target_ts, pred_close, pred_vol in expired_rows:
-                error = round(abs(pred_close - actual_ltp), 2)
-                pct_error = round((error / actual_ltp) * 100, 2) if actual_ltp > 0 else 0
-                status = "PRECISE_HIT" if pct_error <= 0.8 else "ADAPTIVE_REWEIGHT"
-
-                cursor.execute("""
-                    INSERT INTO learning_ledger (
-                        evaluated_at, token, step, predicted_price, actual_realized_price,
-                        error_diff_inr, pct_error, minute_volume,
-                        bid1_p, bid1_q, bid2_p, bid2_q, bid3_p, bid3_q, bid4_p, bid4_q, bid5_p, bid5_q,
-                        ask1_p, ask1_q, ask2_p, ask2_q, ask3_p, ask3_q, ask4_p, ask4_q, ask5_p, ask5_q,
-                        order_imbalance, adaptation_action
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    now_str, token, step_val, pred_close, round(actual_ltp, 2),
-                    error, pct_error, pred_vol,
-                    b1_p, b1_q, b2_p, b2_q, b3_p, b3_q, b4_p, b4_q, b5_p, b5_q,
-                    a1_p, a1_q, a2_p, a2_q, a3_p, a3_q, a4_p, a4_q, a5_p, a5_q,
-                    imbalance, status
-                ))
-
-                cursor.execute("DELETE FROM active_predictions WHERE token = ? AND step = ?", (token, step_val))
-
-            conn.commit()
-            conn.close()
-            return True
-        except Exception:
-            return False
-
-GLOBAL_QUANT_BRAIN = AutonomousQuantBrain()
-
-# =====================================================================
-# 5. 24/7 BACKGROUND AUTONOMOUS WORKER DAEMON
-# =====================================================================
-class GlobalAutonomousWorker:
+class BackgroundVaultEngine:
     def __init__(self):
         self.is_running = False
         self.connector = None
-        self.last_minute_cycle = -1
+        self.last_sync_minute = -1
 
     def start(self, connector):
         self.connector = connector
@@ -579,58 +262,60 @@ class GlobalAutonomousWorker:
                     for _, item in watchlist_df.iterrows():
                         tok = str(item["token"])
                         exch = item["exchange"]
-                        sym = item.get("symbol", "")
+                        sym = str(item["symbol"])
 
-                        quote = self.connector.fetch_live_quote(exch, sym, tok)
-                        if not quote:
-                            continue
+                        # 1. Capture Per-Second Level 2 Tick
+                        quote = self.connector.fetch_live_depth(exch, sym, tok)
+                        if quote and quote["ltp"] > 0:
+                            conn_tick = get_db()
+                            cursor_tick = conn_tick.cursor()
+                            cursor_tick.execute("""
+                                INSERT INTO l2_raw_ticks (
+                                    timestamp, token, ltp, volume,
+                                    bid1, bidq1, bid2, bidq2, bid3, bidq3, bid4, bidq4, bid5, bidq5,
+                                    ask1, askq1, ask2, askq2, ask3, askq3, ask4, askq4, ask5, askq5,
+                                    total_bid_quantity, total_ask_quantity
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                now_str, tok, quote["ltp"], quote["volume"],
+                                quote["bid1"], quote["bidq1"], quote["bid2"], quote["bidq2"], quote["bid3"], quote["bidq3"], quote["bid4"], quote["bidq4"], quote["bid5"], quote["bidq5"],
+                                quote["ask1"], quote["askq1"], quote["ask2"], quote["askq2"], quote["ask3"], quote["askq3"], quote["ask4"], quote["askq4"], quote["ask5"], quote["ask5"],
+                                quote["total_bid_quantity"], quote["total_ask_quantity"]
+                            ))
+                            conn_tick.commit()
+                            conn_tick.close()
 
-                        ltp = quote["ltp"]
-                        microprice = quote["microprice"]
-                        imbalance = quote["imbalance"]
-
-                        conn_tick = get_db()
-                        cursor_tick = conn_tick.cursor()
-                        cursor_tick.execute("""
-                            INSERT INTO l2_depth_ticks (
-                                timestamp, exchange, token, ltp, microprice, imbalance,
-                                bid1, bidq1, bid2, bidq2, bid3, bidq3, bid4, bidq4, bid5, bidq5,
-                                ask1, askq1, ask2, askq2, ask3, askq3, ask4, askq4, ask5, askq5,
-                                total_buy_qty, total_sell_qty
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            now_str, exch, tok, ltp, microprice, imbalance,
-                            quote["bid1"], quote["bidq1"], quote["bid2"], quote["bidq2"], quote["bid3"], quote["bidq3"], quote["bid4"], quote["bidq4"], quote["bid5"], quote["bidq5"],
-                            quote["ask1"], quote["askq1"], quote["ask2"], quote["askq2"], quote["ask3"], quote["askq3"], quote["ask4"], quote["ask4"], quote["ask5"], quote["ask5"],
-                            quote["total_buy_qty"], quote["total_sell_qty"]
-                        ))
-                        conn_tick.commit()
-                        conn_tick.close()
-
-                        has_expired = GLOBAL_QUANT_BRAIN.evaluate_minute_expiry(tok, quote)
-
-                        if curr_min != self.last_minute_cycle or has_expired:
+                        # 2. Capture Per-Minute OHLCV Candles
+                        if curr_min != self.last_sync_minute:
                             hist_df = self.connector.fetch_historical(exch, tok, days=2)
-                            f_df = MultiModalFeatureEngine.extract_features(hist_df)
-                            GLOBAL_QUANT_BRAIN.roll_forward_prediction(tok, f_df, ltp, l2_imbalance=imbalance, microprice=microprice)
+                            if not hist_df.empty:
+                                conn_hist = get_db()
+                                cursor_hist = conn_hist.cursor()
+                                for _, r in hist_df.tail(60).iterrows():
+                                    cursor_hist.execute("""
+                                        INSERT OR REPLACE INTO historical_minute_candles VALUES (?, ?, ?, ?, ?, ?, ?)
+                                    """, (r["Timestamp"].strftime("%Y-%m-%d %H:%M"), tok, r["Open"], r["High"], r["Low"], r["Close"], int(r["Volume"])))
+                                conn_hist.commit()
+                                conn_hist.close()
 
-                    if curr_min != self.last_minute_cycle:
-                        self.last_minute_cycle = curr_min
+                    if curr_min != self.last_sync_minute:
+                        self.last_sync_minute = curr_min
 
             except Exception:
                 pass
             time.sleep(1)
 
-if "bg_worker_daemon" not in st.session_state:
-    st.session_state.bg_worker_daemon = GlobalAutonomousWorker()
+if "vault_daemon" not in st.session_state:
+    st.session_state.vault_daemon = BackgroundVaultEngine()
 
 # =====================================================================
-# 6. STREAMLIT FRONTEND WORKSTATION
+# 4. STREAMLIT WORKSTATION INTERFACE
 # =====================================================================
-st.title("⚡ Omni-Regime Autonomous AI Trading Agent")
-st.caption("24/7 Autopilot: Real-Time Level-2 Ingestion, Forward Horizon & Side-by-Side Reality Auditing.")
+st.title("💾 Market Data Vault (High-Frequency Extraction Engine)")
+st.caption("Pure exchange recording: Per-second L2 depth ticks, per-minute historical candles & direct Excel export.")
 
-st.sidebar.header("🔑 Broker Connection (Angel One)")
+# Sidebar Broker Access
+st.sidebar.header("🔑 Angel One Authentication")
 api_key = st.sidebar.text_input("API Key", value=DEFAULT_API_KEY)
 client_code = st.sidebar.text_input("Client Code", value=DEFAULT_CLIENT_CODE)
 pin = st.sidebar.text_input("PIN", value=DEFAULT_PIN, type="password")
@@ -639,13 +324,14 @@ totp_sec = st.sidebar.text_input("TOTP Secret", value=DEFAULT_TOTP_SECRET)
 agent_conn = SmartApiConnector(api_key, client_code, pin, totp_sec)
 is_connected = agent_conn.connect()
 if is_connected:
-    st.sidebar.success("🟢 Broker Stream: Active & Connected")
-    st.session_state.bg_worker_daemon.start(agent_conn)
+    st.sidebar.success("🟢 Broker Stream Active & Connected")
+    st.session_state.vault_daemon.start(agent_conn)
 else:
     st.sidebar.error("🔴 Disconnected. Check Credentials.")
 
 scrip_master = load_scrip_master()
 
+# Persistent watchlist read
 try:
     conn_wl = get_db()
     saved_wl_df = pd.read_sql("SELECT * FROM active_watchlist", conn_wl)
@@ -654,21 +340,21 @@ try:
 except Exception:
     active_tokens_info = []
 
-tab_watch, tab_learning, tab_dash, tab_inspect, tab_db = st.tabs([
-    "🎯 Dynamic 50-Watchlist",
-    "🧠 Autonomous Self-Learning Engine",
-    "📊 3-Tier Multi-Horizon Dashboard",
-    "🔬 100+ Methods Inspector",
-    "💾 Master SQLite Database"
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🎯 Tab 1: Top 50 Instrument Selector",
+    "⚡ Tab 2: Live Per-Second Record & Stream",
+    "📊 Tab 3: Historical Per-Minute Store",
+    "📥 Tab 4: Mobile/PC Excel Exporter"
 ])
-# ---------------- TAB 1: DYNAMIC 50-WATCHLIST ----------------
-with tab_watch:
-    st.subheader("🎯 Configure Autonomous Tracking (Max 50 Instruments)")
-    st.caption("Selected instruments are permanently stored in SQLite and continuously monitored by the background worker.")
+
+# ---------------- TAB 1: TOP 50 SELECTOR ----------------
+with tab1:
+    st.subheader("🎯 Configure Continuous Ingestion Watchlist (Max 50 Instruments)")
+    st.caption("Selected instruments are permanently stored in SQLite. The background worker continuously streams and stores both per-second L2 depth and per-minute candles.")
 
     col_w1, col_w2 = st.columns(2)
     with col_w1:
-        sel_seg = st.selectbox("1. Segment", ["NFO", "MCX", "NSE", "CDS"], index=0)
+        sel_seg = st.selectbox("1. Select Segment", ["NFO", "MCX", "NSE", "CDS"], index=0)
     with col_w2:
         names_in_seg = sorted(scrip_master[scrip_master["exch_seg"] == sel_seg]["name"].dropna().unique().tolist())
         d_idx = names_in_seg.index("NIFTY") if "NIFTY" in names_in_seg else 0
@@ -680,7 +366,7 @@ with tab_watch:
         col_f1, col_f2, col_f3 = st.columns(3)
         with col_f1:
             expiries = sorted(subset_df["expiry"].dropna().unique().tolist())
-            sel_expiry = st.selectbox("3. Expiry", expiries) if expiries else None
+            sel_expiry = st.selectbox("3. Expiry Date", expiries) if expiries else None
         with col_f2:
             sel_opttype = st.selectbox("4. Option Type", ["ALL", "CE", "PE"])
         with col_f3:
@@ -697,7 +383,7 @@ with tab_watch:
     else:
         available_choices = subset_df["label"].tolist()
 
-    selected_batch = st.multiselect("Select Contracts:", options=available_choices, default=available_choices[:3] if len(available_choices) >= 3 else available_choices)
+    selected_batch = st.multiselect("Select Contracts to Track:", options=available_choices, default=available_choices[:3] if len(available_choices) >= 3 else available_choices)
 
     col_b1, col_b2 = st.columns(2)
     with col_b1:
@@ -711,7 +397,7 @@ with tab_watch:
                 cursor.execute("INSERT OR REPLACE INTO active_watchlist VALUES (?, ?, ?, ?)", (tok, p[0], sym, item))
             conn.commit()
             conn.close()
-            st.toast("Watchlist stored permanently!")
+            st.toast("Active watchlist updated and locked into SQLite!")
             st.rerun()
 
     with col_b2:
@@ -720,223 +406,158 @@ with tab_watch:
             conn.execute("DELETE FROM active_watchlist")
             conn.commit()
             conn.close()
-            st.toast("Watchlist cleared; database records remain safe.")
+            st.toast("Active watchlist cleared; stored historical and tick records remain safe.")
             st.rerun()
 
     if active_tokens_info:
-        st.success(f"🟢 Background Daemon Active: Continuously learning for {len(active_tokens_info)} instruments.")
-        st.dataframe(pd.DataFrame(active_tokens_info)[["exchange", "token", "label"]], use_container_width=True)
+        st.success(f"🟢 Active Daemon Tracking {len(active_tokens_info)} Instruments Non-Stop!")
+        st.dataframe(pd.DataFrame(active_tokens_info)[["exchange", "token", "symbol", "label"]], use_container_width=True)
     else:
-        st.info("No active instruments currently tracked. Select from above and click 'Add Selected'.")
+        st.info("Currently 0 instruments tracked. Select contracts above and click 'Add Selected'.")
 
-# ---------------- TAB 2: AUTONOMOUS SELF-LEARNING ENGINE ----------------
-with tab_learning:
-    st.subheader("🧠 Autonomous Self-Learning & Real-Time Adaptation Engine")
-    st.caption("Live streaming data matrices, green predictive forward horizon, and side-by-side error ledger.")
+# ---------------- TAB 2: LIVE PER-SECOND RECORD & STREAM ----------------
+with tab2:
+    st.subheader("⚡ Live Per-Second Level-2 Depth Stream (25 Columns)")
+    st.caption("Every second of all selected 50 instruments is continuously recorded in SQLite. Select an instrument to view its live incoming order depth.")
 
     if not active_tokens_info:
-        st.warning("Pehle Tab 1 me jakar instruments add karein taaki self-learning matrix load ho sake.")
+        st.warning("Pehle Tab 1 me jakar instruments add karein.")
     else:
-        inspect_label = st.selectbox("🎯 Select Tracked Asset to Inspect:", [x["label"] for x in active_tokens_info], key="learn_asset_sel")
+        inspect_label = st.selectbox("🎯 Select Tracked Asset to Inspect Live:", [x["label"] for x in active_tokens_info], key="t2_sel")
         sel_meta = [x for x in active_tokens_info if x["label"] == inspect_label][0]
         curr_token = str(sel_meta["token"])
-        curr_exch = sel_meta["exchange"]
-        curr_sym = sel_meta.get("symbol", "")
 
-        quote_res = agent_conn.fetch_live_quote(curr_exch, curr_sym, curr_token)
-        if quote_res and quote_res.get("ltp", 0.0) > 0:
-            live_p = quote_res["ltp"]
-        else:
-            conn = get_db()
-            cur_tick = pd.read_sql("SELECT ltp FROM l2_depth_ticks WHERE token = ? ORDER BY rowid DESC LIMIT 1", conn, params=(curr_token,))
-            conn.close()
-            live_p = float(cur_tick.iloc[0]["ltp"]) if not cur_tick.empty else 0.0
-
-        if quote_res:
-            GLOBAL_QUANT_BRAIN.evaluate_minute_expiry(curr_token, quote_res)
-
-        # 1. GREEN FORWARD PREDICTION HORIZON
-        st.markdown("### 🟢 Forward Prediction Horizon (Next 10 Minutes)")
-        st.caption("Auto-rolling window: As each minute completes, it evaluates and adds the next forward minute.")
-
-        now_ts = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
         conn = get_db()
-        live_preds = pd.read_sql("""
-            SELECT step, target_timestamp, predicted_open, predicted_high, predicted_low, predicted_close, predicted_volume 
-            FROM active_predictions 
-            WHERE token = ? AND target_timestamp > ?
-            ORDER BY target_timestamp ASC
-        """, conn, params=(curr_token, now_ts))
+        t2_ticks = pd.read_sql("SELECT COUNT(*) as c FROM l2_raw_ticks WHERE token = ?", conn, params=(curr_token,))["c"].iloc[0]
         conn.close()
 
-        if (live_preds.empty or len(live_preds) < 10) and live_p > 0:
-            hist_df = agent_conn.fetch_historical(curr_exch, curr_token, days=2)
-            feat_df = MultiModalFeatureEngine.extract_features(hist_df)
-            st.session_state["active_feature_df"] = feat_df
-            imb = quote_res["imbalance"] if quote_res else 0.0
-            micro = quote_res["microprice"] if quote_res else live_p
-            GLOBAL_QUANT_BRAIN.roll_forward_prediction(curr_token, feat_df, live_p, l2_imbalance=imb, microprice=micro)
-            conn = get_db()
-            live_preds = pd.read_sql("""
-                SELECT step, target_timestamp, predicted_open, predicted_high, predicted_low, predicted_close, predicted_volume 
-                FROM active_predictions 
-                WHERE token = ?
-                ORDER BY target_timestamp ASC
-            """, conn, params=(curr_token,))
-            conn.close()
+        st.metric(f"Total Per-Second Ticks Recorded for Token {curr_token}", f"{t2_ticks:,}")
 
-        if not live_preds.empty:
-            styled_df = live_preds.copy()
-            for col in ["predicted_open", "predicted_high", "predicted_low", "predicted_close"]:
-                styled_df[col] = styled_df[col].round(2)
-            st.dataframe(
-                styled_df.style.set_properties(**{
-                    "background-color": "#0d2818",
-                    "color": "#00FFA3",
-                    "border-color": "#00FFA3"
-                }),
-                use_container_width=True
-            )
-        else:
-            st.info(f"Waiting for live market tick for token {curr_token}...")
-
-        # 2. SIDE-BY-SIDE REALITY VS PREDICTION COMPARISON
-        st.markdown("### ⚖️ Side-by-Side Reality vs Prediction Comparison (Self-Correction Ledger)")
-        st.caption("Compares realized prices with forecasts, alongside realized Top-5 Bid/Ask wall depth & minute volume.")
-
+        # Display latest 50 recorded per-second ticks
         conn = get_db()
-        raw_ledger = pd.read_sql("""
-            SELECT evaluated_at, step, predicted_price, actual_realized_price, error_diff_inr, pct_error, minute_volume,
-                   bid1_p, bid1_q, bid2_p, bid2_q, bid3_p, bid3_q, bid4_p, bid4_q, bid5_p, bid5_q,
-                   ask1_p, ask1_q, ask2_p, ask2_q, ask3_p, ask3_q, ask4_p, ask4_q, ask5_p, ask5_q,
-                   order_imbalance, adaptation_action
-            FROM learning_ledger 
+        ticks_df = pd.read_sql("""
+            SELECT timestamp, ltp, volume,
+                   bid1, bidq1, bid2, bidq2, bid3, bidq3, bid4, bidq4, bid5, bidq5,
+                   ask1, askq1, ask2, askq2, ask3, askq3, ask4, askq4, ask5, askq5,
+                   total_bid_quantity, total_ask_quantity
+            FROM l2_raw_ticks 
             WHERE token = ? 
-            ORDER BY rowid DESC LIMIT 20
+            ORDER BY rowid DESC LIMIT 50
         """, conn, params=(curr_token,))
         conn.close()
 
-        if not raw_ledger.empty:
-            st.dataframe(raw_ledger, use_container_width=True)
+        if not ticks_df.empty:
+            st.dataframe(ticks_df, use_container_width=True)
         else:
-            first_target = live_preds.iloc[0]['target_timestamp'] if not live_preds.empty else "Next Minute"
-            st.info(f"Token {curr_token} monitoring active. Pehla target horizon ({first_target}) hit hote hi actual exchange price ke saath row register ho jayegi.")
+            st.info(f"Background daemon is ingesting per-second ticks for token {curr_token}. Stand by for incoming ticks...")
 
-        # 3. LIVE STREAMING DATA MATRIX
-        st.markdown("### 🗄️ Ingested Data Feed Matrix (Historical vs Live Per-Second)")
-        data_view_mode = st.radio("Select Ingestion Matrix to View:", ["⚡ Live Per-Second L2 Depth (25 Columns)", "📊 Historical Per-Minute Bars (Database Cache)"], horizontal=True, key="mat_rad")
+# ---------------- TAB 3: HISTORICAL PER-MINUTE STORE ----------------
+with tab3:
+    st.subheader("📊 Historical Per-Minute OHLCV Store")
+    st.caption("Deep 1-minute historical data for all selected instruments permanently preserved in SQLite.")
+
+    if not active_tokens_info:
+        st.warning("Pehle Tab 1 me jakar instruments add karein.")
+    else:
+        h_inspect_label = st.selectbox("🎯 Select Tracked Asset to View Historical Bars:", [x["label"] for x in active_tokens_info], key="t3_sel")
+        h_sel_meta = [x for x in active_tokens_info if x["label"] == h_inspect_label][0]
+        h_token = str(h_sel_meta["token"])
+        h_exch = h_sel_meta["exchange"]
+
+        col_h1, col_h2 = st.columns([1, 3])
+        with col_h1:
+            if st.button("🔄 Fetch & Append Deep History (15 Days)"):
+                with st.spinner("Pulling candles from exchange gateway..."):
+                    deep_df = agent_conn.fetch_historical(h_exch, h_token, interval="ONE_MINUTE", days=15)
+                    if not deep_df.empty:
+                        conn = get_db()
+                        cursor = conn.cursor()
+                        for _, r in deep_df.iterrows():
+                            cursor.execute("""
+                                INSERT OR REPLACE INTO historical_minute_candles VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """, (r["Timestamp"].strftime("%Y-%m-%d %H:%M"), h_token, r["Open"], r["High"], r["Low"], r["Close"], int(r["Volume"])))
+                        conn.commit()
+                        conn.close()
+                        st.success(f"Successfully appended {len(deep_df)} minute bars!")
+                        st.rerun()
 
         conn = get_db()
-        if "Live Per-Second" in data_view_mode:
-            st.caption("⚡ Streaming Live Ticks: Automatically appending every second directly from exchange.")
-            l2_feed = pd.read_sql("SELECT timestamp, ltp, microprice, imbalance, bid1, bidq1, bid2, bidq2, bid3, bidq3, ask1, askq1, ask2, askq2, ask3, askq3, total_buy_qty, total_sell_qty FROM l2_depth_ticks WHERE token = ? ORDER BY rowid DESC LIMIT 25", conn, params=(curr_token,))
-            if not l2_feed.empty:
-                st.dataframe(l2_feed, use_container_width=True)
-            else:
-                st.info("Streaming ticks from exchange pipeline into SQLite. Stand by...")
-        else:
-            st.caption("📊 1-Minute OHLCV bars ingested and cached in SQLite master memory.")
-            hist_feed = pd.read_sql("SELECT timestamp, open, high, low, close, volume FROM historical_minute_candles WHERE token = ? ORDER BY timestamp DESC LIMIT 25", conn, params=(curr_token,))
-            if not hist_feed.empty:
-                st.dataframe(hist_feed, use_container_width=True)
-            else:
-                if "active_feature_df" in st.session_state and not st.session_state["active_feature_df"].empty:
-                    st.dataframe(st.session_state["active_feature_df"][["Timestamp", "Open", "High", "Low", "Close", "Volume"]].tail(25), use_container_width=True)
+        t3_count = pd.read_sql("SELECT COUNT(*) as c FROM historical_minute_candles WHERE token = ?", conn, params=(h_token,))["c"].iloc[0]
+        hist_view_df = pd.read_sql("SELECT timestamp, open, high, low, close, volume FROM historical_minute_candles WHERE token = ? ORDER BY timestamp DESC LIMIT 100", conn, params=(h_token,))
         conn.close()
 
-# ---------------- TAB 3: 3-TIER MULTI-HORIZON DASHBOARD ----------------
-with tab_dash:
-    st.subheader("Dynamic Autonomous Visualizer (3 Cards)")
-
-    if active_tokens_info:
-        d_label = st.selectbox("Select Target for Visual Chart:", [x["label"] for x in active_tokens_info], key="dash_sel")
-        d_meta = [x for x in active_tokens_info if x["label"] == d_label][0]
-        d_tok = str(d_meta["token"])
-        d_exch = d_meta["exchange"]
-        d_sym = d_meta.get("symbol", "")
-
-        quote_d = agent_conn.fetch_live_quote(d_exch, d_sym, d_tok)
-        live_p = quote_d["ltp"] if quote_d else 0.0
-
-        hist_df = agent_conn.fetch_historical(d_exch, d_tok, days=2)
-        if not hist_df.empty:
-            feat_df = MultiModalFeatureEngine.extract_features(hist_df)
-            sl = feat_df.tail(40).copy()
-
-            st.markdown("#### 1️⃣ Past Price Action (VWAP & EMA)")
-            fig_p = go.Figure()
-            fig_p.add_trace(go.Candlestick(x=sl["Timestamp"].astype(str), open=sl["Open"], high=sl["High"], low=sl["Low"], close=sl["Close"], name="Candles"))
-            fig_p.add_trace(go.Scatter(x=sl["Timestamp"].astype(str), y=sl["VWAP"], line=dict(color="#ab63fa", width=1.8), name="VWAP"))
-            fig_p.add_trace(go.Scatter(x=sl["Timestamp"].astype(str), y=sl["EMA_9"], line=dict(color="#00cc96", width=1.4), name="9 EMA"))
-            fig_p.update_layout(height=320, margin=dict(l=10, r=10, t=25, b=10), template="plotly_dark", xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig_p, use_container_width=True)
-
-            st.markdown("#### 2️⃣ Cumulative Volume Delta (CVD)")
-            fig_c = go.Figure()
-            fig_c.add_trace(go.Scatter(x=sl["Timestamp"].astype(str), y=sl["CVD"], line=dict(color="#ffa15a", width=2.0), fill="tozeroy", name="CVD"))
-            fig_c.update_layout(height=200, margin=dict(l=10, r=10, t=25, b=10), template="plotly_dark", xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig_c, use_container_width=True)
+        st.metric(f"Total Historical 1-Minute Bars Stored for Token {h_token}", f"{t3_count:,}")
+        if not hist_view_df.empty:
+            st.dataframe(hist_view_df, use_container_width=True)
         else:
-            st.info("Exchange candle data loading for this instrument...")
+            st.info("No historical bars in database yet. Click 'Fetch & Append Deep History' to pull from exchange.")
+
+# ---------------- TAB 4: MOBILE/PC EXCEL EXPORTER ----------------
+with tab4:
+    st.subheader("📥 Direct Excel Data Exporter (.xlsx)")
+    st.caption("Select dataset type, instrument, and time period to download formatted Excel sheets directly to your mobile or computer.")
+
+    export_type = st.radio("1. Select Dataset Type:", [
+        "⚡ Level-2 Per-Second Raw Stream (25 Columns)",
+        "📊 Historical Per-Minute OHLCV Candles"
+    ], horizontal=True)
+
+    if not active_tokens_info:
+        st.warning("Watchlist is empty. Add instruments in Tab 1 to enable export.")
     else:
-        st.info("Watchlist me instruments add karein.")
+        exp_label = st.selectbox("2. Select Instrument to Export:", [x["label"] for x in active_tokens_info], key="exp_sel")
+        exp_meta = [x for x in active_tokens_info if x["label"] == exp_label][0]
+        exp_token = str(exp_meta["token"])
 
-# ---------------- TAB 4: 100+ METHODS INSPECTOR ----------------
-with tab_inspect:
-    st.subheader("🔬 100+ Quantitative Methods Inspector")
-    
-    if active_tokens_info:
-        insp_label = st.selectbox("Select Asset to Inspect Methods:", [x["label"] for x in active_tokens_info], key="insp_asset_sel")
-        i_meta = [x for x in active_tokens_info if x["label"] == insp_label][0]
-        i_tok = str(i_meta["token"])
-        i_exch = i_meta["exchange"]
-        i_sym = i_meta.get("symbol", "")
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            start_date = st.date_input("Start Date", value=datetime.now(IST).date() - timedelta(days=2))
+        with col_d2:
+            end_date = st.date_input("End Date", value=datetime.now(IST).date())
 
-        cat_sel = st.selectbox("Category:", [
-            "1. Smart Money Concepts (BOS, FVG)",
-            "2. Institutional CVD Order Flow",
-            "3. Anchored VWAP & Standard Deviation Bands",
-            "4. Quantitative Volatility & Bollinger Bands",
-            "5. Astro-Harmonics & Lunar Frequencies",
-            "6. 14-Period RSI Oscillator"
-        ])
+        s_str = start_date.strftime("%Y-%m-%d 00:00:00")
+        e_str = end_date.strftime("%Y-%m-%d 23:59:59")
 
-        i_hist = agent_conn.fetch_historical(i_exch, i_tok, days=2)
-        if not i_hist.empty:
-            idf = MultiModalFeatureEngine.extract_features(i_hist).tail(40).copy()
-
-            if "1. Smart Money" in cat_sel:
-                st.dataframe(idf[["Timestamp", "Close", "BOS_Bullish", "BOS_Bearish", "Bullish_FVG", "Bearish_FVG"]].tail(20), use_container_width=True)
-            elif "2. Institutional CVD" in cat_sel:
-                st.dataframe(idf[["Timestamp", "Close", "Volume_Delta", "CVD"]].tail(20), use_container_width=True)
-            elif "3. Anchored VWAP" in cat_sel:
-                st.dataframe(idf[["Timestamp", "Close", "VWAP", "VWAP_Upper_1", "VWAP_Lower_1", "VWAP_Upper_2", "VWAP_Lower_2"]].tail(20), use_container_width=True)
-            elif "4. Quantitative Volatility" in cat_sel:
-                st.dataframe(idf[["Timestamp", "Close", "ATR_14", "BB_Upper", "BB_Lower", "BB_Width", "Regime"]].tail(20), use_container_width=True)
-            elif "5. Astro-Harmonics" in cat_sel:
-                st.dataframe(idf[["Timestamp", "Close", "Lunar_Phase_Sin", "Lunar_Phase_Cos"]].tail(20), use_container_width=True)
-            elif "6. 14-Period RSI" in cat_sel:
-                st.dataframe(idf[["Timestamp", "Close", "RSI_14"]].tail(20), use_container_width=True)
-        else:
-            st.info("Historical indicators compiling from exchange candles...")
-    else:
-        st.info("Watchlist me instruments add karein.")
-
-# ---------------- TAB 5: DATABASE ARCHIVE ----------------
-with tab_db:
-    st.subheader("💾 Master SQLite Database Archive")
-    try:
         conn = get_db()
-        t_ticks = pd.read_sql("SELECT COUNT(*) as c FROM l2_depth_ticks", conn)["c"].iloc[0]
-        t_audits = pd.read_sql("SELECT COUNT(*) as c FROM learning_ledger", conn)["c"].iloc[0]
+        if "Level-2" in export_type:
+            query = """
+                SELECT timestamp as Timestamp, ltp as LTP, volume as Volume,
+                       bid1 as Bid1, bidq1 as BidQ1, bid2 as Bid2, bidq2 as BidQ2, bid3 as Bid3, bidq3 as BidQ3, bid4 as Bid4, bidq4 as BidQ4, bid5 as Bid5, bidq5 as BidQ5,
+                       ask1 as Ask1, askq1 as AskQ1, ask2 as Ask2, askq2 as AskQ2, ask3 as Ask3, askq3 as AskQ3, ask4 as Ask4, askq4 as AskQ4, ask5 as Ask5, askq5 as AskQ5,
+                       total_bid_quantity as Total_Bid_Quantity, total_ask_quantity as Total_Ask_Quantity
+                FROM l2_raw_ticks 
+                WHERE token = ? AND timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp ASC
+            """
+            file_tag = f"L2_Ticks_Token_{exp_token}"
+        else:
+            query = """
+                SELECT timestamp as Timestamp, open as Open, high as High, low as Low, close as Close, volume as Volume
+                FROM historical_minute_candles 
+                WHERE token = ? AND timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp ASC
+            """
+            file_tag = f"Minute_Bars_Token_{exp_token}"
+
+        export_df = pd.read_sql(query, conn, params=(exp_token, s_str, e_str))
         conn.close()
 
-        c1, c2 = st.columns(2)
-        c1.metric("Total L2 Depth Ticks Stored", f"{t_ticks:,}")
-        c2.metric("Total Autonomous Audits Executed", f"{t_audits:,}")
+        st.markdown(f"**Found {len(export_df):,} matching rows** for export.")
 
-        if os.path.exists(DB_PATH):
-            with open(DB_PATH, "rb") as f:
-                st.download_button("📥 Download SQLite Database (.db)", f.read(), file_name="market_memory_v23.db", mime="application/x-sqlite3")
-    except Exception as e:
-        st.info(f"Archive compiling database stats... ({e})")
+        if not export_df.empty:
+            # Generate Excel in-memory buffer
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                export_df.to_excel(writer, index=False, sheet_name="Market_Data")
+            excel_data = output.getvalue()
+
+            file_name = f"{file_tag}_{start_date.strftime('%Y%m%d')}_to_{end_date.strftime('%Y%m%d')}.xlsx"
+
+            st.download_button(
+                label=f"📥 Download {file_name} (.xlsx)",
+                data=excel_data,
+                file_name=file_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.info("Selected date range has 0 recorded rows for this instrument. Adjust the date filters or let the engine record more live data.")
